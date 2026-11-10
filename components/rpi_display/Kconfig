@@ -1,4 +1,12 @@
+config SDR_WAVESHARE_43
+    bool "Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3 (MIPI + GT911)"
+    default n
+    help
+        Select the built-in 480x800 MIPI display and capacitive touch instead of
+        the separate 3.5in Raspberry Pi SPI display.
+
 menu "3.5in RPi display, 16-bit SPI (ILI9486 + XPT2046)"
+    depends on !SDR_WAVESHARE_43
 
     comment "Defaults: panel plugged straight onto the Waveshare ESP32-P4-Module-DEV-KIT 40-pin header"
 

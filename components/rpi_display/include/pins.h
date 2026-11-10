@@ -16,6 +16,15 @@
  * VERIFY with a meter before power: header pin 1 (square pad) = 3V3, pin 2 = 5V, pin 6 = GND.
  */
 #include "sdkconfig.h"
+#ifdef CONFIG_SDR_WAVESHARE_43
+/* Built-in ST7701 MIPI panel: native portrait 480x800, no SPI header. */
+#define LCD_LONG 800
+#define LCD_SHORT 480
+extern int rpi_lcd_w, rpi_lcd_h;
+#define LCD_W rpi_lcd_w
+#define LCD_H rpi_lcd_h
+#define LCD_PORTRAIT (rpi_lcd_w < rpi_lcd_h)
+#else
 /* Set in menuconfig ("3.5in RPi display, 16-bit SPI"); defaults are the direct-plug pins above. */
 #define PIN_LCD_SCK    CONFIG_RPI_LCD_PIN_SCK
 #define PIN_LCD_MOSI   CONFIG_RPI_LCD_PIN_MOSI
@@ -39,3 +48,4 @@ extern int rpi_lcd_w, rpi_lcd_h;
 #define LCD_W rpi_lcd_w
 #define LCD_H rpi_lcd_h
 #define LCD_PORTRAIT (rpi_lcd_w < rpi_lcd_h)
+#endif /* CONFIG_SDR_WAVESHARE_43 */

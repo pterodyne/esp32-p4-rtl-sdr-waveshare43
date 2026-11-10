@@ -27,6 +27,11 @@ static const char *TAG = "audio";
 #define PIN_WS    10
 #define PIN_DOUT  9                           /* to the codec's DSDIN */
 #define PIN_PA    53
+#ifdef CONFIG_SDR_WAVESHARE_43
+#define AUDIO_I2C_PORT CONFIG_BSP_I2C_NUM
+#else
+#define AUDIO_I2C_PORT I2C_NUM_0
+#endif
 
 #define READ_MAX  (2 * 4800)                  /* bytes per pass: 2 ms of IQ, 96 samples out */
 #define BYTES_MS  (2 * DEMOD_IN_RATE / 1000)
@@ -94,13 +99,20 @@ static void audio_task(void *arg)
 bool audio_init(void)
 {
     i2c_master_bus_handle_t bus;
+#ifdef CONFIG_SDR_WAVESHARE_43
+    /* GT911 already owns the BSP I2C port. Share its bus with the ES8311. */
+    if (i2c_master_get_bus_handle(AUDIO_I2C_PORT, &bus) != ESP_OK) return false;
+#else
     i2c_master_bus_config_t bc = {.i2c_port = I2C_NUM_0, .sda_io_num = PIN_SDA, .scl_io_num = PIN_SCL,
                                   .clk_source = I2C_CLK_SRC_DEFAULT, .glitch_ignore_cnt = 7,
                                   .flags.enable_internal_pullup = true};
     if (i2c_new_master_bus(&bc, &bus) != ESP_OK) return false;
+#endif
     if (i2c_master_probe(bus, ES8311_CODEC_DEFAULT_ADDR >> 1, 50) != ESP_OK) {
         ESP_LOGW(TAG, "no ES8311 at 0x%02x: no audio", ES8311_CODEC_DEFAULT_ADDR >> 1);
+#ifndef CONFIG_SDR_WAVESHARE_43
         i2c_del_master_bus(bus);
+#endif
         return false;
     }
 
@@ -117,7 +129,7 @@ bool audio_init(void)
     };
     if (i2s_channel_init_std_mode(tx, &sc) != ESP_OK) return false;
 
-    audio_codec_i2c_cfg_t ic = {.port = I2C_NUM_0, .addr = ES8311_CODEC_DEFAULT_ADDR, .bus_handle = bus};
+    audio_codec_i2c_cfg_t ic = {.port = AUDIO_I2C_PORT, .addr = ES8311_CODEC_DEFAULT_ADDR, .bus_handle = bus};
     audio_codec_i2s_cfg_t dc = {.port = I2S_NUM_0, .tx_handle = tx};
     es8311_codec_cfg_t ec = {
         .ctrl_if = audio_codec_new_i2c_ctrl(&ic),

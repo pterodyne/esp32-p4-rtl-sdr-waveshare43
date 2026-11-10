@@ -271,11 +271,15 @@ static void layout(void)
     const int y = T->btn_y, h = T->btn_h;
     if (!LCD_PORTRAIT) {
         static const int bx[VIEW_NBTN][2] = {{4, 44}, {52, 54}, {318, 54}, {376, 44}, {424, 52}, {110, 204}};
-        for (int i = 0; i < VIEW_NBTN; i++) s_btn[i] = (button_t){bx[i][0], y, bx[i][1], h, lbl[i]};
+        for (int i = 0; i < VIEW_NBTN; i++) {
+            int x = bx[i][0] * LCD_W / 480;
+            int end = (bx[i][0] + bx[i][1]) * LCD_W / 480;
+            s_btn[i] = (button_t){x, y, end - x, h, lbl[i]};
+        }
         s_hdr_h = T->hdr_h;
         s_spec_h = T->spec_h;
-        s_ro_x0 = 106;
-        s_ro_x1 = 318;
+        s_ro_x0 = 106 * LCD_W / 480;
+        s_ro_x1 = 318 * LCD_W / 480;
         return;
     }
     const int kw = (LCD_W - 5 * 4) / 4;

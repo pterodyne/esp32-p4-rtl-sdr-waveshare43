@@ -32,7 +32,9 @@ static void power_off(void)
 {
     if (s_pwr) sd_pwr_ctrl_del_on_chip_ldo(s_pwr);
     s_pwr = NULL;
+#ifndef CONFIG_SDR_WAVESHARE_43
     gpio_set_level(PIN_SD_PWR, 1);
+#endif
 }
 
 bool sdcard_mount(void)
@@ -43,9 +45,11 @@ bool sdcard_mount(void)
         xSemaphoreGive(s_lock);
         return true;
     }
+#ifndef CONFIG_SDR_WAVESHARE_43
     gpio_config_t io = {.pin_bit_mask = 1ULL << PIN_SD_PWR, .mode = GPIO_MODE_OUTPUT};
     gpio_config(&io);
     gpio_set_level(PIN_SD_PWR, 0);
+#endif
     sd_pwr_ctrl_ldo_config_t ldo = {.ldo_chan_id = SD_LDO_CHAN};
     if (sd_pwr_ctrl_new_on_chip_ldo(&ldo, &s_pwr) != ESP_OK) {
         ESP_LOGE(TAG, "no LDO %d for the card", SD_LDO_CHAN);

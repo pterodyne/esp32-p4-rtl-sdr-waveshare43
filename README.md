@@ -1,4 +1,16 @@
-# P4 SDR: RTL-SDR receiver, ADS-B and Wi-Fi/BLE scanner on the ESP32-P4
+# P4 SDR for Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3
+
+This is a **Waveshare 4.3-inch MIPI display port** of
+[John O'Dell's P4 SDR v1.2.0](https://github.com/John-ODell/esp32-p4-rtl-sdr/tree/v1.2.0).
+The RTL-SDR, ADS-B, audio, Wi-Fi/BLE and SD features are inherited from upstream;
+the display, touch, audio and SD board setup have been adapted for this board.
+The project remains under its upstream GPL-3.0 license (see [LICENSE](LICENSE)).
+
+**Start with [WAVESHARE-43.md](WAVESHARE-43.md)** for build and flashing instructions,
+USB-host power/wiring requirements, and board-specific limitations. The original
+kit's USB-A/H3 jumper and 3.5-inch SPI screen instructions below do **not** apply.
+
+## Original 3.5-inch kit documentation (upstream reference)
 
 **An RTL-SDR Blog V4 dongle, a Waveshare ESP32-P4 kit and the cheap 3.5" Raspberry Pi
 touchscreen make a handheld spectrum and waterfall receiver. It has no Linux or PC behind it:

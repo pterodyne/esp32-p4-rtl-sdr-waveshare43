@@ -51,6 +51,14 @@ static void splash_and_touch(void)
 {
     view_init(SDR_SAMPLE_RATE);
     view_set_theme(s_theme);
+#ifdef CONFIG_SDR_WAVESHARE_43
+    /* GT911 reports absolute panel pixels, so the resistive five-point
+     * calibration and its hold-to-recalibrate prompt do not apply. */
+    touch_cal_load(&s_cal, NULL);
+    view_splash(0, 1, SUB);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    return;
+#endif
     bool held = false;
     TickType_t t0 = xTaskGetTickCount();
     for (int i = 0; i < FRAMES && !held; i++) {
@@ -77,7 +85,13 @@ static void load_settings(void)
     if (nvs_open("sdr", NVS_READONLY, &h) != ESP_OK) return;
     uint32_t f;
     int32_t g, p;
-    if (nvs_get_i32(h, "port", &p) == ESP_OK && p) rpi_lcd_set_portrait(true);
+    if (nvs_get_i32(h, "port", &p) == ESP_OK) {
+#ifdef CONFIG_SDR_WAVESHARE_43
+        rpi_lcd_set_portrait(p != 0);
+#else
+        if (p) rpi_lcd_set_portrait(true);
+#endif
+    }
     if (nvs_get_u32(h, "freq", &f) == ESP_OK) sdr_set_freq(f);
     if (nvs_get_i32(h, "gaint", &g) == ESP_OK) sdr_set_gain_tenths(g);   /* applied on open */
     if (nvs_get_i32(h, "theme", &p) == ESP_OK) s_theme = p;
@@ -88,11 +102,19 @@ static void main_task(void *arg)
 {
     load_settings();                         /* first: it holds the screen orientation */
     splash_and_touch();
+#ifdef CONFIG_SDR_WAVESHARE_43
+    status(SPLASH_TEXT, "looking for RTL-SDR on USB OTG (powered hub)...");
+#else
     status(SPLASH_TEXT, "looking for the RTL-SDR on the USB-A ports...");
+#endif
     char desc[96];
     int tries = 0;
     while (!sdr_open(5000, desc, sizeof desc)) {
+#ifdef CONFIG_SDR_WAVESHARE_43
+        if (++tries == 1) status(SPLASH_BAD, "no RTL-SDR yet: check USB-C OTG host power");
+#else
         if (++tries == 1) status(SPLASH_BAD, "no RTL-SDR yet: plug it in, or move the H3 cap");
+#endif
     }
     view_splash_line(LINE(2), desc, SPLASH_OK);
     status(SPLASH_TEXT, "USB link check...");
