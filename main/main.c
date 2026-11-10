@@ -16,6 +16,9 @@
 #include "xpt2046.h"
 #include "touch_cal.h"
 #include "pins.h"
+#ifdef CONFIG_SDR_WAVESHARE_43
+#include "waveshare_geometry.h"
+#endif
 #include "sdr.h"
 #include "ui.h"
 #include "view.h"
@@ -85,13 +88,16 @@ static void load_settings(void)
     if (nvs_open("sdr", NVS_READONLY, &h) != ESP_OK) return;
     uint32_t f;
     int32_t g, p;
-    if (nvs_get_i32(h, "port", &p) == ESP_OK) {
 #ifdef CONFIG_SDR_WAVESHARE_43
-        rpi_lcd_set_portrait(p != 0);
+    if (nvs_get_i32(h, "rot", &p) == ESP_OK && p >= 0 && p < 4)
+        ESP_ERROR_CHECK(rpi_lcd_set_rotation(p));
+    else if (nvs_get_i32(h, "port", &p) == ESP_OK)
+        ESP_ERROR_CHECK(rpi_lcd_set_rotation(waveshare_legacy_rotation(p)));
 #else
+    if (nvs_get_i32(h, "port", &p) == ESP_OK) {
         if (p) rpi_lcd_set_portrait(true);
-#endif
     }
+#endif
     if (nvs_get_u32(h, "freq", &f) == ESP_OK) sdr_set_freq(f);
     if (nvs_get_i32(h, "gaint", &g) == ESP_OK) sdr_set_gain_tenths(g);   /* applied on open */
     if (nvs_get_i32(h, "theme", &p) == ESP_OK) s_theme = p;

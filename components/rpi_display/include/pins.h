@@ -20,10 +20,11 @@
 /* Built-in ST7701 MIPI panel: native portrait 480x800, no SPI header. */
 #define LCD_LONG 800
 #define LCD_SHORT 480
-extern int rpi_lcd_w, rpi_lcd_h;
+extern int rpi_lcd_w, rpi_lcd_h, rpi_lcd_rotation;
 #define LCD_W rpi_lcd_w
 #define LCD_H rpi_lcd_h
 #define LCD_PORTRAIT (rpi_lcd_w < rpi_lcd_h)
+#define LCD_ROTATION rpi_lcd_rotation
 #else
 /* Set in menuconfig ("3.5in RPi display, 16-bit SPI"); defaults are the direct-plug pins above. */
 #define PIN_LCD_SCK    CONFIG_RPI_LCD_PIN_SCK

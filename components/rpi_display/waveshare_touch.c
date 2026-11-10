@@ -48,7 +48,7 @@ esp_err_t touch_cal_run(touch_cal_t *c, float *error)
 void touch_cal_map(const touch_cal_t *c, uint16_t raw_x, uint16_t raw_y, int *x, int *y)
 {
     (void)c;
-    waveshare_panel_to_screen(LCD_PORTRAIT, raw_x, raw_y, x, y);
+    waveshare_panel_to_screen(LCD_ROTATION, raw_x, raw_y, x, y);
     if (*x < 0) *x = 0;
     if (*y < 0) *y = 0;
     if (*x >= LCD_W) *x = LCD_W - 1;

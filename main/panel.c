@@ -215,7 +215,14 @@ static void build(const ctl_t *c)
             k->big = true;
             k->sel = i == view_theme();
         }
+#ifdef CONFIG_SDR_WAVESHARE_43
+        static const char *const turn_sub[4] = {
+            "next: 90 DEG", "next: 180 DEG", "next: 270 DEG", "next: 0 DEG"
+        };
+        grid(GAP, by, bw, bh, 2, 3, 5, K_TURN, "TURN", turn_sub[LCD_ROTATION])->big = true;
+#else
         grid(GAP, by, bw, bh, 2, 3, 5, K_TURN, "TURN", p ? "back to landscape" : "portrait, USB up")->big = true;
+#endif
         break;
     }
 }

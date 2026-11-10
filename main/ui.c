@@ -19,6 +19,9 @@
 #include "rpi_text.h"
 #include "xpt2046.h"
 #include "pins.h"
+#ifdef CONFIG_SDR_WAVESHARE_43
+#include "waveshare_geometry.h"
+#endif
 #include "sdr.h"
 #include "rtlsdr_usb.h"
 #include "spectrum.h"
@@ -260,15 +263,22 @@ static void set_look(int i)
     settings_changed();
 }
 
-/* landscape <-> portrait: saved at once (main.c reads it before the splash), then every
- * screen is laid out again */
+/* Saved at once (main.c reads it before the splash), then re-layout the UI. */
 static void turn(void)
 {
+#ifdef CONFIG_SDR_WAVESHARE_43
+    int rotation = waveshare_next_rotation(LCD_ROTATION);
+    ESP_ERROR_CHECK(rpi_lcd_set_rotation(rotation));
+    nvs_set_i32(s_nvs, "rot", rotation);
+    nvs_commit(s_nvs);
+    ESP_LOGI(TAG, "rotation: %d degrees clockwise", rotation * 90);
+#else
     bool p = !LCD_PORTRAIT;
     rpi_lcd_set_portrait(p);
     nvs_set_i32(s_nvs, "port", p);
     nvs_commit(s_nvs);
     ESP_LOGI(TAG, "%s", p ? "portrait" : "landscape");
+#endif
     set_look(view_theme());
     draw_header(-1);
 }

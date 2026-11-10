@@ -3,13 +3,14 @@
 Fork of [John O'Dell's P4 SDR](https://github.com/John-ODell/esp32-p4-rtl-sdr)
 (GPL-3.0; original license and attribution retained).
 
-This branch targets the **Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3**, not the
-ESP32-P4-Module-DEV-KIT plus 3.5-inch Raspberry Pi SPI HAT described in the
-upstream README. It uses the board's 480×800 ST7701 MIPI-DSI panel and GT911
-capacitive touch (no calibration), and retains the original RTL-SDR, SD card,
-ES8311 audio and ESP32-C6 Wi-Fi/BLE code. The display starts in portrait and
-can switch to landscape with **MENU → LOOK → TURN**. Landscape is rotated in
-software, so it may draw more slowly than portrait.
+This branch targets the **Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3**. It uses the
+board's 480×800 ST7701 MIPI-DSI panel and GT911 capacitive touch (no
+calibration), and retains the original RTL-SDR, SD card,
+ES8311 audio and ESP32-C6 Wi-Fi/BLE code. The display starts in native
+portrait and **MENU → LOOK → TURN** cycles through all four 90-degree
+orientations (0°/90°/180°/270° clockwise), rotating touch with the picture.
+The selection is saved; older `port` portrait/landscape settings are migrated
+on load. Landscape draws in software, so it may be slower than portrait.
 
 **USB host wiring:** the 40-pin J3 header exposes the *same* native high-speed
 USB controller as the Type-C **USB OTG** connector: J3 pin 27 is D+ (`USBD_P`),
@@ -25,11 +26,16 @@ alone may not resolve USB-C host-role/CC wiring; verify the adapter's host role
 before relying on that route.
 
 **Hardware requirement:** connect an RTL-SDR dongle to the native USB host data
-pair, with separately supplied/protected 5 V power. The old kit's USB-A hub and
-H3 host jumper do not exist on this board. Use the **USB TO UART** Type-C port
-for flashing/serial console. An antenna is needed for reception. Do not plug
-the USB-C OTG port directly into a computer when using it as a host. The
-firmware's old “USB-A ports / H3 cap” splash wording is not applicable here.
+pair, with separately supplied/protected 5 V power. **User report:** the RTL-SDR
+works on J3 with the battery removed and the board powered from a USB host; on
+battery alone the board browns out. A suitable additional power controller and
+charge circuit will be needed for battery operation. Its electrical design and
+current budget remain to be investigated; do not assume the current battery
+path is adequate. The old kit's USB-A hub and H3 host jumper do not exist on
+this board. Use the **USB TO UART** Type-C port for flashing/serial console. An
+antenna is needed for reception. Do not plug the USB-C OTG port directly into
+a computer when using it as a host. The firmware's old “USB-A ports / H3 cap”
+splash wording is not applicable here.
 
 ## Flash
 
@@ -46,13 +52,14 @@ python -m esptool --chip esp32p4 -p PORT -b 921600 write_flash 0x0 dist/p4-sdr-w
 
 Use `dist/p4-sdr-waveshare43-rev1.bin` if your P4 is revision v1.x. Compare
 against `dist/SHA256SUMS-waveshare43` before flashing. A full-image flash can
-overwrite saved settings and channel memories. **The rev3 full-flash image has
-been flashed by a user on this board and its display works.** SDR operation is
-not yet verified: a passive USB-C adapter did not power/enumerate the dongle.
-The rev1 image remains cross-compiled and untested on this board. Inspect the
-UART console at 115200 baud when testing USB, touch and other functions. The
-ESP32-C6 may need compatible ESP-Hosted coprocessor firmware for Wi-Fi/BLE
-scanning; audio and SD operation have not been verified on this board.
+overwrite saved settings and channel memories. **A previous rev3 full-flash
+image was user-flashed on this board: its display and RTL-SDR via J3 worked
+with USB-supplied power and no battery.** The updated four-way rotation build
+has passed host geometry tests and cross-compilation but has not yet been
+flashed/verified on the board. Rev1 remains cross-compiled and untested.
+Inspect the UART console at 115200 baud when testing new functions. The ESP32-C6
+may need compatible ESP-Hosted coprocessor firmware for Wi-Fi/BLE scanning;
+audio and SD operation have not been verified on this board.
 
 ## Rebuild
 

@@ -8,20 +8,29 @@ receiver to this integrated display board.
 The inherited application includes a spectrum/waterfall receiver, AM/FM audio,
 RDS, ADS-B aircraft display, channel memories, microSD logging, and Wi-Fi/BLE
 scanning through the on-board ESP32-C6. Features beyond the display have not
-all been checked on this board.
+all been checked on this board. **MENU → LOOK → TURN** cycles the screen and
+touch through 0°, 90°, 180° and 270° clockwise from the native portrait
+orientation; the choice is saved for the next boot. Four-way rotation has been
+host-tested and cross-compiled, but awaits on-board testing.
 
 ## Hardware status
 
 | Image | P4 revision | Status on this board |
 | --- | --- | --- |
-| `p4-sdr-waveshare43-rev3.bin` | v3.1 and newer | **User flashed it successfully; display works.** RTL-SDR reception is not yet verified. |
+| `p4-sdr-waveshare43-rev3.bin` | v3.1 and newer | **Previous rev3 image user-flashed: display and RTL-SDR on J3 work with USB-supplied power and no battery.** Four-way-rotation update is built but not yet hardware-tested. |
 | `p4-sdr-waveshare43-rev1.bin` | v1.x | Cross-compiled; not tested on this board. |
 
-The RTL-SDR was **not detected through a passive USB-C adapter**: the native
-USB-C port marked **USB** does not provide the dongle's 5 V VBUS in the
-bare-board setup. This is a hardware power/host-cabling issue to resolve before
-calling the SDR path tested. Touch, audio, SD logging and wireless scanning are
-not being claimed as hardware-verified here.
+**Battery-power limitation (user report):** with the RTL-SDR connected via J3,
+the board browns out when running from its battery. The same setup works with
+the battery removed and the board powered from a USB host. An additional power
+controller/charge circuit will be required for battery operation; its design and
+current budget have **not** been established yet. Do not assume the board's
+existing battery path can power the display and dongle together.
+
+The dongle was not detected through a **passive USB-C adapter** on the port
+marked **USB**, which does not source USB VBUS in the bare-board setup. J3 works;
+that observation does not validate USB-C host-role cabling. Audio, SD logging
+and wireless scanning are not being claimed as hardware-verified here.
 
 ## USB host connections
 

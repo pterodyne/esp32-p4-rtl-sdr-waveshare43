@@ -17,7 +17,7 @@ static const char *TAG = "waveshare_lcd";
 static esp_lcd_panel_handle_t s_panel;
 static uint16_t *s_buf;
 static SemaphoreHandle_t s_copy_done;
-int rpi_lcd_w = 480, rpi_lcd_h = 800;
+int rpi_lcd_w = 480, rpi_lcd_h = 800, rpi_lcd_rotation = 0;
 
 static bool on_copy_done(esp_lcd_panel_handle_t panel, esp_lcd_dpi_panel_event_data_t *event, void *ctx)
 {
@@ -50,11 +50,18 @@ esp_err_t rpi_lcd_init(void)
     return bsp_display_backlight_on();
 }
 
+esp_err_t rpi_lcd_set_rotation(int quarter_turns)
+{
+    if (quarter_turns < 0 || quarter_turns > 3) return ESP_ERR_INVALID_ARG;
+    rpi_lcd_rotation = quarter_turns;
+    rpi_lcd_w = quarter_turns & 1 ? 800 : 480;
+    rpi_lcd_h = quarter_turns & 1 ? 480 : 800;
+    return ESP_OK;
+}
+
 esp_err_t rpi_lcd_set_portrait(bool on)
 {
-    rpi_lcd_w = on ? 480 : 800;
-    rpi_lcd_h = on ? 800 : 480;
-    return ESP_OK;
+    return rpi_lcd_set_rotation(waveshare_legacy_rotation(on));
 }
 
 esp_err_t rpi_lcd_blit(int x, int y, int w, int h, const uint16_t *pix)
@@ -63,17 +70,17 @@ esp_err_t rpi_lcd_blit(int x, int y, int w, int h, const uint16_t *pix)
     if (!pix || w < 0 || h < 0 || x < 0 || y < 0 || x + w > LCD_W || y + h > LCD_H)
         return ESP_ERR_INVALID_ARG;
     if (!w || !h) return ESP_OK;
-    bool portrait = LCD_PORTRAIT;
+    int rotation = LCD_ROTATION;
     int px0, py0, px1, py1;
-    waveshare_screen_to_panel(portrait, x, y, &px0, &py0);
-    waveshare_screen_to_panel(portrait, x + w - 1, y + h - 1, &px1, &py1);
+    waveshare_screen_to_panel(rotation, x, y, &px0, &py0);
+    waveshare_screen_to_panel(rotation, x + w - 1, y + h - 1, &px1, &py1);
     if (px0 > px1) { int t = px0; px0 = px1; px1 = t; }
     if (py0 > py1) { int t = py0; py0 = py1; py1 = t; }
     int pw = px1 - px0 + 1, ph = py1 - py0 + 1;
     for (int row = 0; row < ph; row++) {
         for (int col = 0; col < pw; col++) {
             int sx, sy;
-            waveshare_panel_to_screen(portrait, px0 + col, py0 + row, &sx, &sy);
+            waveshare_panel_to_screen(rotation, px0 + col, py0 + row, &sx, &sy);
             s_buf[row * pw + col] = pix[(sy - y) * w + (sx - x)];
         }
     }
@@ -87,10 +94,10 @@ esp_err_t rpi_lcd_fill_rect(int x, int y, int w, int h, uint16_t color)
     if (x + w > LCD_W) w = LCD_W - x;
     if (y + h > LCD_H) h = LCD_H - y;
     if (w <= 0 || h <= 0) return ESP_OK;
-    bool portrait = LCD_PORTRAIT;
+    int rotation = LCD_ROTATION;
     int px0, py0, px1, py1;
-    waveshare_screen_to_panel(portrait, x, y, &px0, &py0);
-    waveshare_screen_to_panel(portrait, x + w - 1, y + h - 1, &px1, &py1);
+    waveshare_screen_to_panel(rotation, x, y, &px0, &py0);
+    waveshare_screen_to_panel(rotation, x + w - 1, y + h - 1, &px1, &py1);
     if (px0 > px1) { int t = px0; px0 = px1; px1 = t; }
     if (py0 > py1) { int t = py0; py0 = py1; py1 = t; }
     for (int i = 0; i < w * h; i++) s_buf[i] = color;

@@ -1,4 +1,5 @@
 #pragma once
+#include "sdkconfig.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -15,6 +16,10 @@ esp_err_t rpi_lcd_blit(int x, int y, int w, int h, const uint16_t *pix);
 esp_err_t rpi_lcd_set_window(int x0, int y0, int x1, int y1);   /* then rpi_lcd_push_pixels_be */
 esp_err_t rpi_lcd_push_pixels_be(const uint8_t *be_bytes, size_t nbytes);
 spi_host_device_t rpi_lcd_spi_host(void);
-/* 320x480 with the kit's USB ports up, or back to 480x320. Sets LCD_W/LCD_H (pins.h). Touch
- * calibration stays in landscape; touch_cal_map turns points to match. */
+/* Compatibility orientation setter: native portrait on the Waveshare board, or
+ * the original kit's 320x480 portrait. Updates LCD_W/LCD_H (pins.h). */
 esp_err_t rpi_lcd_set_portrait(bool on);
+#ifdef CONFIG_SDR_WAVESHARE_43
+/* Native portrait = 0, then 90/180/270 degrees clockwise. */
+esp_err_t rpi_lcd_set_rotation(int quarter_turns);
+#endif
