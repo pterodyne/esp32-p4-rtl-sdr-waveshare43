@@ -421,19 +421,26 @@ static void test_audio_controls(void)
             view_header(142000000, "AGC", -1);
             memcpy(old_header, fb, header_bytes);
             view_header(142000100, "AGC", -1);
-            assert(!memcmp(old_header, fb, header_bytes)); /* FM stays at whole kHz */
-            free(old_header);
 #ifdef CONFIG_SDR_WAVESHARE_43
-            static const int tune_keys[] = {VIEW_DN1M, VIEW_DN100K, VIEW_DN100,
-                                            VIEW_UP100, VIEW_UP100K, VIEW_UP1M};
-            for (int i = 0; i < 6; i++) {
-                int kw = (LCD_W - 7 * 4) / 6;
-                int bx = LCD_PORTRAIT ? 4 + i * (kw + 4) + kw / 2 :
-                         (int[]){37, 109, 181, 553, 617, 681}[i];
-                int by = LCD_PORTRAIT ? view_tune_y() - 20 : 20;
-                assert(view_button_at(bx, by) == tune_keys[i]);
-            }
+            assert(memcmp(old_header, fb, header_bytes)); /* preserve a residual 100 Hz offset */
+#else
+            assert(!memcmp(old_header, fb, header_bytes)); /* original kit keeps whole-kHz FM */
 #endif
+#ifdef CONFIG_SDR_WAVESHARE_43
+            int by = LCD_PORTRAIT ? view_tune_y() - 20 : 20;
+            assert(view_button_at(LCD_PORTRAIT ? 50 : 40, by) == VIEW_DN1M);
+            assert(view_button_at(LCD_PORTRAIT ? 240 : 135, by) == VIEW_STEP);
+            assert(view_button_at(LCD_PORTRAIT ? 425 : 660, by) == VIEW_UP1M);
+            assert(view_button_at(LCD_PORTRAIT ? 240 : 400, 20) == -1); /* no theme cycling */
+            assert(view_button_at(LCD_PORTRAIT ? 50 : 40, by) != VIEW_STEP);
+            view_set_tune_step("1k");
+            view_header(142000000, "AGC", -1);
+            memcpy(old_header, fb, header_bytes);
+            view_set_tune_step("12.5k");
+            view_header(142000000, "AGC", -1);
+            assert(memcmp(old_header, fb, header_bytes)); /* visible selected step */
+#endif
+            free(old_header);
             int x = LCD_W - 8 - 208, y = LCD_H - 8 - 72;
             assert(y > view_tune_y());
             assert(view_audio_button_at(x + 94, y + 19) == VIEW_MUTE);
@@ -626,7 +633,7 @@ static void test_rf_settings(void)
 
 static void test_ism_bands(void)
 {
-    assert(PANEL_BANDS == 11); /* append; preserve eight existing preset indexes */
+    assert(PANEL_BANDS >= 11); /* append; preserve eight existing preset indexes */
     static const uint32_t hz[] = {315000000, 345000000, 915000000};
     for (int i = 0; i < 3; i++) {
         uint32_t freq;
@@ -638,32 +645,62 @@ static void test_ism_bands(void)
     uint32_t freq;
     int bw, zoom;
     assert(panel_band(6, &freq, &bw, &zoom) && freq == 433920000); /* existing 70cm/433 slot */
+    puts("North American RX preset frequencies: 315, 345, 433.92 and 915 MHz");
+}
+
+static void test_am_sw_cb_pages(void)
+{
+    static const struct { uint32_t hz; int mode; } added[] = {
+        {600000, 3}, {1000000, 3}, {1600000, 3},
+        {3950000, 3}, {4900000, 3}, {6050000, 3}, {7250000, 3},
+        {9650000, 3}, {11850000, 3}, {13700000, 3}, {15350000, 3},
+        {17700000, 3}, {21600000, 3},
+        {26965000, 3}, {27065000, 3}, {27185000, 3},
+        {27385000, 5}, {27385000, 4}, {27405000, 3},
+    };
+    assert(PANEL_BANDS == 11 + (int)(sizeof added / sizeof added[0]));
+    for (int i = 11; i < PANEL_BANDS; i++) {
+        uint32_t hz; int bw, zoom;
+        assert(panel_band(i, &hz, &bw, &zoom));
+        assert(hz == added[i - 11].hz && bw == added[i - 11].mode);
+        assert(zoom >= 0 && zoom < PANEL_ZOOMS);
+    }
     view_init(RATE);
     panel_init();
     for (int portrait = 0; portrait < 2; portrait++) {
         rpi_lcd_set_portrait(portrait != 0);
-        ctl_t ct = {.gain_label = gain_label, .gain_tenths = gain_tenths, .gain_n = 30};
+        view_set_theme(0);
+        ctl_t ct = {.gain_idx = 0, .gain_n = 30, .gain_label = gain_label,
+                    .gain_tenths = gain_tenths};
         panel_open(&ct);
         int cols = portrait ? 2 : 4, rows = portrait ? 5 : 3;
         int cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
         int ch = (LCD_H - view_tune_y() - 12 - 6 * (rows - 1)) / rows;
-        int mx = 6 + (4 % cols) * (cw + 6) + cw / 2;
-        int my = view_tune_y() + 6 + (4 / cols) * (ch + 6) + ch / 2;
-        panel_touch(&ct, PANEL_PRESS, mx, my, 0);
-        panel_touch(&ct, PANEL_RELEASE, mx, my, 0); /* BAND page */
-        int by = view_tune_y() + 56, bh = LCD_H - view_tune_y() - 62;
-        int grid_rows = (PANEL_BANDS + cols - 1) / cols;
-        cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
-        ch = (bh - 6 * (grid_rows - 1)) / grid_rows;
-        for (int i = 8; i < PANEL_BANDS; i++) {
-            int x = 6 + (i % cols) * (cw + 6) + cw / 2;
-            int y = by + (i / cols) * (ch + 6) + ch / 2;
+        int x = 6 + (4 % cols) * (cw + 6) + cw / 2;
+        int y = view_tune_y() + 6 + (4 / cols) * (ch + 6) + ch / 2;
+        panel_touch(&ct, PANEL_PRESS, x, y, 0);
+        panel_touch(&ct, PANEL_RELEASE, x, y, 0); /* BAND page */
+        int bh = LCD_H - view_tune_y() - 62;
+        int grid_h = bh - 54;
+        int page_size = cols * (portrait ? 5 : 3), page = 0;
+        for (int i = 0; i < PANEL_BANDS; i++) {
+            while (page < i / page_size) {
+                int nx = LCD_W * 3 / 4, ny = view_tune_y() + 56 + bh - 24;
+                panel_touch(&ct, PANEL_PRESS, nx, ny, 0);
+                assert(!(panel_touch(&ct, PANEL_RELEASE, nx, ny, 0) & CTL_BAND));
+                page++;
+            }
+            cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
+            ch = (grid_h - 6 * ((page_size / cols) - 1)) / (page_size / cols);
+            int cell = i % page_size;
+            x = 6 + (cell % cols) * (cw + 6) + cw / 2;
+            y = view_tune_y() + 56 + (cell / cols) * (ch + 6) + ch / 2;
             panel_touch(&ct, PANEL_PRESS, x, y, 0);
             assert(panel_touch(&ct, PANEL_RELEASE, x, y, 0) & CTL_BAND);
             assert(ct.band == i);
         }
     }
-    puts("North American RX presets: 315, 345, 433.92 and 915 MHz");
+    puts("30 RX presets, AM/SW/CB demod modes, every paginated hit in both orientations");
 }
 
 static void test_theme_header_disabled(void)
@@ -702,6 +739,7 @@ static void test_theme_header_disabled(void)
 
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--test-bands")) { test_am_sw_cb_pages(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-theme")) { test_theme_header_disabled(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-audio")) { test_audio_controls(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-phosphor")) { test_phosphor_green(); return 0; }

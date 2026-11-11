@@ -12,7 +12,7 @@
 #include "spectrum.h"
 
 enum { VIEW_DN1M, VIEW_DN100K, VIEW_UP100K, VIEW_UP1M, VIEW_DN100, VIEW_UP100,
-       VIEW_GAIN, VIEW_THEME, VIEW_NBTN,
+       VIEW_STEP, VIEW_GAIN, VIEW_THEME, VIEW_NBTN,
        VIEW_VOL_DN, VIEW_VOL_UP, VIEW_SQL_DN, VIEW_SQL_UP, VIEW_MODE_0,
        VIEW_ZOOM_DN = VIEW_MODE_0 + 6, VIEW_ZOOM_UP, VIEW_MUTE };
 
@@ -35,7 +35,8 @@ uint32_t view_span(void);
 int view_hz_per_px(void);
 void view_set_passband(uint32_t hz);         /* shaded filter width around the centre */
 void view_set_sideband(int side);            /* -1 LSB, 0 symmetric, +1 USB */
-void view_set_fine_tune(bool fine);          /* SSB: header steps 1 kHz / 100 Hz */
+void view_set_fine_tune(bool fine);          /* show the 100 Hz digit for SSB or a 100 Hz step */
+void view_set_tune_step(const char *label);  /* Waveshare header selected step indicator */
 /* plate at the top left of the spectrum: label (NULL = none), live = speaker lit */
 void view_set_audio(const char *label, bool live);
 /* Persistent footer below the waterfall: mode choices and volume/squelch steppers. */

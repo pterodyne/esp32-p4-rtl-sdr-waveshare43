@@ -150,6 +150,7 @@ static int s_hdr_h, s_spec_h;                /* the theme's, plus the portrait e
 /* header buttons, placed by layout() */
 typedef struct { int x, y, w, h; const char *label; } button_t;
 static button_t s_btn[VIEW_NBTN];
+static char s_step_text[20] = "STEP 10k";
 static int s_ro_x0, s_ro_x1;                 /* room for the frequency readout */
 
 static uint32_t s_rate, s_span, s_pb_hz = 200000;   /* sample rate, shown width, shaded passband */
@@ -252,6 +253,10 @@ void view_set_span(uint32_t span)
 void view_set_passband(uint32_t hz) { s_pb_hz = hz; }
 void view_set_sideband(int side) { s_pb_side = side < 0 ? -1 : side > 0 ? 1 : 0; }
 void view_set_fine_tune(bool fine) { s_fine_tune = fine; }
+void view_set_tune_step(const char *label)
+{
+    snprintf(s_step_text, sizeof s_step_text, "STEP %s", label ? label : "10k");
+}
 
 void view_set_audio(const char *label, bool live)
 {
@@ -409,38 +414,40 @@ static void scale(float *lo, float *hi, float *wlo, float *whi)
 }
 float view_floor(void) { return s_floor; }
 
-/* Waveshare: six tuning keys (1M, middle, fine) around the frequency in landscape,
- * or a six-key row below it in portrait. Keep the old four-key layout on smaller kits. */
+/* Waveshare: two arrows and a step selector, keeping the frequency readout tappable.
+ * Keep the old four-key layout on smaller kits. */
 static void layout(void)
 {
-    static const char *lbl[VIEW_NBTN] = {"-1M", "-100k", "+100k", "+1M",
-                                         "-10k", "+10k", NULL, NULL};
+#ifndef CONFIG_SDR_WAVESHARE_43
+    static const char *lbl[VIEW_NBTN] = {
+        [VIEW_DN1M] = "-1M", [VIEW_DN100K] = "-100k",
+        [VIEW_UP100K] = "+100k", [VIEW_UP1M] = "+1M",
+        [VIEW_DN100] = "-10k", [VIEW_UP100] = "+10k",
+    };
+#endif
     const int y = T->btn_y, h = T->btn_h;
     memset(s_btn, 0, sizeof s_btn);
 #ifdef CONFIG_SDR_WAVESHARE_43
     if (!LCD_PORTRAIT) {
-        static const struct { int id, x, w; } steps[] = {
-            {VIEW_DN1M, 4, 66}, {VIEW_DN100K, 76, 66}, {VIEW_DN100, 148, 66},
-            {VIEW_UP100, 524, 58}, {VIEW_UP100K, 588, 58}, {VIEW_UP1M, 652, 58},
-        };
-        for (int i = 0; i < 6; i++)
-            s_btn[steps[i].id] = (button_t){steps[i].x, y, steps[i].w, h, lbl[steps[i].id]};
+        s_btn[VIEW_DN1M] = (button_t){4, y, 92, h, "<"};
+        s_btn[VIEW_STEP] = (button_t){102, y, 100, h, s_step_text};
+        s_btn[VIEW_UP1M] = (button_t){612, y, 92, h, ">"};
         s_btn[VIEW_GAIN] = (button_t){738, y, 56, h, NULL};
         s_hdr_h = T->hdr_h;
         s_spec_h = T->spec_h;
-        s_ro_x0 = 220; s_ro_x1 = 518;
+        s_ro_x0 = 208; s_ro_x1 = 600;
         return;
     }
-    static const int order[] = {VIEW_DN1M, VIEW_DN100K, VIEW_DN100,
-                                VIEW_UP100, VIEW_UP100K, VIEW_UP1M};
-    int kw6 = (LCD_W - 7 * 4) / 6;
-    for (int i = 0; i < 6; i++)
-        s_btn[order[i]] = (button_t){4 + i * (kw6 + 4), T->hdr_h + 3,
-                                     kw6, PORT_KEYS - 6, lbl[order[i]]};
+    int row_y = T->hdr_h + 3;
+    s_btn[VIEW_DN1M] = (button_t){4, row_y, 86, PORT_KEYS - 6, "<"};
+    s_btn[VIEW_STEP] = (button_t){96, row_y, LCD_W - 192, PORT_KEYS - 6, s_step_text};
+    s_btn[VIEW_UP1M] = (button_t){LCD_W - 90, row_y, 86, PORT_KEYS - 6, ">"};
 #else
     if (!LCD_PORTRAIT) {
         static const int bx[VIEW_NBTN][2] = {
-            {4, 44}, {52, 54}, {318, 54}, {376, 44}, {0, 0}, {0, 0}, {424, 52}
+            [VIEW_DN1M] = {4, 44}, [VIEW_DN100K] = {52, 54},
+            [VIEW_UP100K] = {318, 54}, [VIEW_UP1M] = {376, 44},
+            [VIEW_GAIN] = {424, 52},
         };
         for (int i = 0; i < VIEW_NBTN; i++) {
             int x = bx[i][0] * LCD_W / 480;
@@ -626,6 +633,10 @@ static uint16_t btn_text(bool on)
 void view_header(uint32_t freq, const char *gain, int pressed)
 {
     rpi_canvas_t c = {s_hdr, LCD_W, s_hdr_h};
+    bool show_fraction = s_fine_tune;
+#ifdef CONFIG_SDR_WAVESHARE_43
+    if (freq % 1000 >= 100) show_fraction = true; /* prior 100 Hz tuning stays visible */
+#endif
     for (int y = 0; y < s_hdr_h - 1; y++)
         rpi_cv_fill(&c, 0, y, LCD_W, 1, rpi_mix565(T->hdr_top, T->hdr_bot, y * 256 / s_hdr_h));
     if (T->hdr == HDR_NEON)                  /* glow under the rule */
@@ -645,7 +656,7 @@ void view_header(uint32_t freq, const char *gain, int pressed)
     for (int i = 0; i < VIEW_THEME; i++) {
         const button_t *b = &s_btn[i];
         if (!b->w) continue;
-        bool on = i == pressed;
+        bool on = i == pressed || i == VIEW_STEP; /* selected step is always indicated */
         button(&c, b, on);
         if (i == VIEW_GAIN) {                    /* opens Controls; shows the gain underneath */
             int ty = b->y + (b->h - 32) / 2;
@@ -653,12 +664,14 @@ void view_header(uint32_t freq, const char *gain, int pressed)
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(gain, 1)) / 2, ty + 15, gain,
                         on || T->hdr == HDR_VINTAGE ? btn_text(on) : T->dim, 1);
         } else {
-#ifdef CONFIG_SDR_WAVESHARE_43
-            static const char *fine[] = {"-1M", "-1k", "+1k", "+1M", "-100", "+100"};
-#else
+#ifndef CONFIG_SDR_WAVESHARE_43
             static const char *fine[] = {"-1k", "-100", "+100", "+1k", NULL, NULL};
 #endif
-            const char *label = s_fine_tune && i < VIEW_GAIN ? fine[i] : b->label;
+#ifdef CONFIG_SDR_WAVESHARE_43
+            const char *label = i == VIEW_STEP ? s_step_text : b->label;
+#else
+            const char *label = s_fine_tune && i < VIEW_STEP ? fine[i] : b->label;
+#endif
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(label, 1)) / 2, b->y + (b->h - 16) / 2,
                         label, btn_text(on), 1);
         }
@@ -668,7 +681,7 @@ void view_header(uint32_t freq, const char *gain, int pressed)
     int mhz_w = 4 + rpi_cv_text_w("MHz", 1);
     if (T->hdr == HDR_PORTAPACK) {           /* plain 16x32 digits, zero padded */
         char f[16];
-        if (s_fine_tune)
+        if (show_fraction)
             snprintf(f, sizeof f, "%4" PRIu32 ".%03" PRIu32 "%01" PRIu32,
                      freq / 1000000 % 10000, freq / 1000 % 1000, freq / 100 % 10);
         else snprintf(f, sizeof f, "%4" PRIu32 ".%03" PRIu32, freq / 1000000 % 10000, freq / 1000 % 1000);
@@ -677,7 +690,7 @@ void view_header(uint32_t freq, const char *gain, int pressed)
         rpi_cv_text(&c, x + 4, T->btn_y + 14, "MHz", T->dim, 1);
     } else {
         int y = T->btn_y + (T->btn_h - SEG_H) / 2;
-        int frac_w = s_fine_tune ? 2 + rpi_cv_text_w("0", 1) : 0;
+        int frac_w = show_fraction ? 2 + rpi_cv_text_w("0", 1) : 0;
         int x = x0 + (x1 - x0 - SEG_FREQ_W - frac_w - mhz_w) / 2;
         if (T->hdr == HDR_VINTAGE) {         /* dark glass window */
             outline(&c, x - 6, y - 3, SEG_FREQ_W + frac_w + mhz_w + 12, SEG_H + 6, 4, T->btn_edge, RGB565(14, 8, 3));
@@ -685,7 +698,7 @@ void view_header(uint32_t freq, const char *gain, int pressed)
         }
         bool glow = T->hdr == HDR_PHOSPHOR || T->hdr == HDR_VINTAGE || T->hdr == HDR_NEON;
         x += seg_freq(&c, x, y, freq, T->hdr == HDR_PHOSPHOR ? 16 : 22, glow);
-        if (s_fine_tune) {
+        if (show_fraction) {
             char tenth[2] = {(char)('0' + freq / 100 % 10), 0};
             rpi_cv_text(&c, x + 2, y + 8, tenth, T->freq, 1);
             x += frac_w;

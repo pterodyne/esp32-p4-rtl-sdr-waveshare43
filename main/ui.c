@@ -16,6 +16,7 @@
 #include "esp_heap_caps.h"
 #include "nvs.h"
 #include "theme_store.h"
+#include "tune_step.h"
 #include "rpi_lcd.h"
 #include "rpi_text.h"
 #include "xpt2046.h"
@@ -71,6 +72,9 @@ static void draw_header(int pressed) { view_header(sdr_freq(), sdr_gain_label(sd
 static nvs_handle_t s_nvs;
 static int64_t s_save_at;
 static bool s_theme_save_failed;
+#ifdef CONFIG_SDR_WAVESHARE_43
+static int s_tune_step = TUNE_STEP_DEFAULT;
+#endif
 
 static void settings_changed(void) { s_save_at = esp_timer_get_time() + 3000000; }
 
@@ -81,6 +85,9 @@ static void settings_maybe_save(void)
     nvs_set_u32(s_nvs, "freq", sdr_freq());
     nvs_set_i32(s_nvs, "gaint", sdr_gain_tenths(sdr_gain_index()));
     nvs_set_i32(s_nvs, "theme", view_theme());
+#ifdef CONFIG_SDR_WAVESHARE_43
+    nvs_set_i32(s_nvs, "tstep", s_tune_step);
+#endif
     nvs_set_i32(s_nvs, "rauto", s_ctl.range_auto);
     nvs_set_i32(s_nvs, "ref", s_ctl.ref_db);
     nvs_set_i32(s_nvs, "rspan", s_ctl.range_db);
@@ -101,6 +108,15 @@ static int32_t nvs_int(const char *key, int32_t def)
     return v;
 }
 
+static bool fine_frequency_visible(void)
+{
+#ifdef CONFIG_SDR_WAVESHARE_43
+    return s_ctl.bw >= 4 || tune_step_hz(s_tune_step) == 100;
+#else
+    return s_ctl.bw >= 4;
+#endif
+}
+
 /* zoom, filter and scale from s_ctl into the FFT and the view */
 static void apply_view(void)
 {
@@ -109,7 +125,7 @@ static void apply_view(void)
     view_set_span(panel_zoom_hz(s_ctl.zoom));
     view_set_passband(panel_bw_hz(s_ctl.bw));
     view_set_sideband(s_ctl.bw == 4 ? 1 : s_ctl.bw == 5 ? -1 : 0);
-    view_set_fine_tune(s_ctl.bw >= 4);
+    view_set_fine_tune(fine_frequency_visible());
     view_set_range(s_ctl.range_auto, s_ctl.ref_db, s_ctl.range_db);
 }
 
@@ -154,7 +170,7 @@ static void tune_memory(int i)
     audio_retuned();
     view_set_passband(panel_bw_hz(s_ctl.bw));   /* not apply_view: that clears the waterfall */
     view_set_sideband(s_ctl.bw == 4 ? 1 : s_ctl.bw == 5 ? -1 : 0);
-    view_set_fine_tune(s_ctl.bw >= 4);
+    view_set_fine_tune(fine_frequency_visible());
     apply_audio();
     s_ctl.freq = sdr_freq();
     if (!s_panel) view_axis(sdr_freq());
@@ -337,7 +353,7 @@ static void do_action(int act)
             s_ctl.band = -1;
             view_set_passband(panel_bw_hz(bw));
             view_set_sideband(bw == 4 ? 1 : bw == 5 ? -1 : 0);
-            view_set_fine_tune(bw >= 4);
+            view_set_fine_tune(fine_frequency_visible());
             apply_audio();
             draw_header(-1);
             settings_changed();
@@ -357,14 +373,25 @@ static void do_action(int act)
         view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, s_audio_pressed);
         return;
     }
-    uint32_t f = sdr_freq();
 #ifdef CONFIG_SDR_WAVESHARE_43
-    uint32_t coarse = 1000000;
-    uint32_t fine = s_ctl.bw >= 4 ? 1000 : 100000;
+    if (act == VIEW_STEP) {
+        s_tune_step = tune_step_next(s_tune_step);
+        view_set_tune_step(tune_step_label(s_tune_step));
+        view_set_fine_tune(fine_frequency_visible());
+        settings_changed();
+        draw_header(act);
+        return;
+    }
+    if (act == VIEW_DN1M || act == VIEW_UP1M) {
+        retune(tune_step_offset(sdr_freq(), s_tune_step, act == VIEW_UP1M ? 1 : -1));
+        draw_header(act);
+        return;
+    }
+    if (act == VIEW_GAIN) { panel_show(!s_panel); draw_header(act); }
 #else
+    uint32_t f = sdr_freq();
     uint32_t coarse = s_ctl.bw >= 4 ? 1000 : 1000000;
     uint32_t fine = s_ctl.bw >= 4 ? 100 : 100000;
-#endif
     uint32_t smallest = s_ctl.bw >= 4 ? 100 : 10000;
     switch (act) {
     case VIEW_DN1M:   retune(f > coarse ? f - coarse : 0); break;
@@ -376,6 +403,7 @@ static void do_action(int act)
     case VIEW_GAIN:   panel_show(!s_panel); break;
     }
     draw_header(act);                       /* keep the key lit while held */
+#endif
 }
 
 static void panel_event(int ev, int x, int y, int64_t now)
@@ -577,7 +605,7 @@ static void poll_touch(const touch_cal_t *cal)
             next_repeat = now + 150000;
         }
     }
-    else if (where == 0 && act >= 0 && act < VIEW_GAIN && now >= next_repeat) {
+    else if (where == 0 && act >= 0 && act < VIEW_GAIN && act != VIEW_STEP && now >= next_repeat) {
         do_action(act);
         next_repeat = now + 150000;
     }
@@ -860,6 +888,10 @@ void ui_run(const touch_cal_t *cal)
     s_ctl.range_db = nvs_int("rspan", 60);
     s_ctl.zoom = nvs_int("zoom", 0) % PANEL_ZOOMS;
     s_ctl.bw = nvs_int("bw", 0) % PANEL_BWS;
+#ifdef CONFIG_SDR_WAVESHARE_43
+    s_tune_step = tune_step_index(nvs_int("tstep", TUNE_STEP_DEFAULT));
+    view_set_tune_step(tune_step_label(s_tune_step));
+#endif
     s_ctl.vol = nvs_int("vol", 4);
     s_ctl.sql = nvs_int("sql", 0);
     int saved_direct = nvs_int("direct", 0);
