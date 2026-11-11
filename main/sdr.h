@@ -7,7 +7,7 @@
 
 /* Wait up to timeout_ms for an RTL-SDR on the USB-A ports, open it, set the sample rate. */
 bool sdr_open(uint32_t timeout_ms, char *desc, size_t desc_len);
-void sdr_close(void);
+bool sdr_close(void);                        /* false if RX task still owns the USB device */
 /* Counter-mode USB check (no streaming running): lost bytes and measured bytes/s. */
 bool sdr_link_check(int ms, uint64_t *lost, double *bytes_per_s);
 
@@ -35,3 +35,14 @@ size_t sdr_ring_read(uint8_t *dst, uint64_t *pos, size_t max, uint64_t *dropped)
 /* Stop the stream before changing it. Kept across sdr_close/sdr_open. */
 void sdr_set_sample_rate(uint32_t hz);
 uint32_t sdr_sample_rate(void);
+/* Bias tee powers an active antenna/LNA; OFF by default on every device open.
+ * A Blog EEPROM may force it ON independently of the UI. False = rejected/USB error. */
+bool sdr_set_bias_tee(bool on);
+bool sdr_bias_tee(void);
+bool sdr_bias_command_ok(void);             /* USB command completed, not voltage measured */
+bool sdr_bias_tee_forced(void);
+/* Manual direct ADC modes (0 tuner/auto, 1 I, 2 Q). Blog V4/V4L have no
+ * usable direct-sampling RF path: selecting I/Q on those devices is rejected. */
+bool sdr_set_direct_mode(int mode);
+int sdr_direct_mode(void);
+bool sdr_direct_supported(void);

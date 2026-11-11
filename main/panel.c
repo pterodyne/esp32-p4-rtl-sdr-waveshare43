@@ -48,25 +48,26 @@ const char *panel_band(int i, uint32_t *freq, int *bw, int *zoom)
 
 /* --------------------------------------------------------------------------- keys -- */
 
-enum { P_MENU, P_GAIN, P_RANGE, P_ZOOM, P_BW, P_BAND, P_SCAN, P_LOOK, P_MEM, P_SAVE };
-static const char *s_title[] = {"CONTROLS", "GAIN", "RANGE", "ZOOM", "AUDIO", "BAND", "SCAN", "LOOK", "MEMORY", "SAVE TO"};
+enum { P_MENU, P_GAIN, P_RANGE, P_ZOOM, P_BW, P_BAND, P_SCAN, P_LOOK, P_MEM, P_SAVE, P_RF };
+static const char *s_title[] = {"CONTROLS", "GAIN", "RANGE", "ZOOM", "AUDIO", "BAND", "SCAN", "LOOK", "MEMORY", "SAVE TO", "RF INPUT"};
 #define LOOKS 5
 static const char *s_look_sub[LOOKS] = {"clean blue", "Mayhem style", "green CRT", "walnut and amber", "synthwave"};
 
 enum {
     K_LABEL = -1,                            /* text only, not touchable */
     K_BACK, K_DONE, K_WIFI, K_BLE, K_TURN, K_TILE,   /* K_TILE + page: menu tiles */
-    K_GAIN_DN = K_TILE + 8, K_GAIN_UP, K_GAIN_P,   /* K_GAIN_P + 0..3: presets */
+    K_GAIN_DN = K_TILE + 11, K_GAIN_UP, K_GAIN_P,   /* K_GAIN_P + 0..3: presets */
     K_TOP_DN = K_GAIN_P + 4, K_TOP_UP, K_SPAN_DN, K_SPAN_UP, K_AUTO,
     K_ZOOM, K_BW = K_ZOOM + PANEL_ZOOMS, K_BAND = K_BW + PANEL_BWS, K_LOOK = K_BAND + PANEL_BANDS,
     K_VOL_DN = K_LOOK + LOOKS, K_VOL_UP, K_SQL_DN, K_SQL_UP,
     K_MEMORY, K_SAVE, K_MSCAN, K_SLOT,      /* K_SLOT + 0..7: memory slots */
+    K_DIRECT = K_SLOT + PANEL_MEMS, K_BIAS_OFF = K_DIRECT + 3, K_BIAS_ON,
 };
 
 typedef struct {
     int x, y, w, h, id;
     char l1[16], l2[32];                     /* l1 large, l2 small underneath */
-    bool sel, rep, big;                      /* selected, repeats while held, 2x title */
+    bool sel, rep, big, disabled;            /* selected, repeats, 2x title, or read-only */
 } pkey_t;
 
 #define MAXK 16
@@ -125,19 +126,23 @@ static void build(const ctl_t *c)
     const int c4 = p ? 2 : 4, r2 = p ? 4 : 2;
     if (s_page == P_MENU) {
         int y = GAP, h = s_h - 2 * GAP, w = LCD_W - 2 * GAP;
+        int menu_rows = p ? 5 : 3;
         gain_text(c, v, sizeof v);
-        grid(GAP, y, w, h, c4, r2, 0, K_TILE + P_GAIN, "GAIN", v)->big = true;
+        grid(GAP, y, w, h, c4, menu_rows, 0, K_TILE + P_GAIN, "GAIN", v)->big = true;
         if (c->range_auto) snprintf(v, sizeof v, "auto");
         else snprintf(v, sizeof v, "%d/%d dB", c->ref_db, c->range_db);
-        grid(GAP, y, w, h, c4, r2, 1, K_TILE + P_RANGE, "RANGE", v)->big = true;
-        grid(GAP, y, w, h, c4, r2, 2, K_TILE + P_ZOOM, "ZOOM", s_zoom_lbl[c->zoom])->big = true;
+        grid(GAP, y, w, h, c4, menu_rows, 1, K_TILE + P_RANGE, "RANGE", v)->big = true;
+        grid(GAP, y, w, h, c4, menu_rows, 2, K_TILE + P_ZOOM, "ZOOM", s_zoom_lbl[c->zoom])->big = true;
         if (c->vol) snprintf(v, sizeof v, "%s, vol %d", s_bw_mode[c->bw], c->vol);
         else snprintf(v, sizeof v, "%s, off", s_bw_mode[c->bw]);
-        grid(GAP, y, w, h, c4, r2, 3, K_TILE + P_BW, "AUDIO", v)->big = true;
-        grid(GAP, y, w, h, c4, r2, 4, K_TILE + P_BAND, "BAND", c->band >= 0 ? s_band[c->band].name : "presets")->big = true;
-        grid(GAP, y, w, h, c4, r2, 5, K_TILE + P_SCAN, "SCAN", "Wi-Fi, BLE, memory")->big = true;
-        grid(GAP, y, w, h, c4, r2, 6, K_TILE + P_LOOK, "LOOK", view_theme_name(view_theme()))->big = true;
-        grid(GAP, y, w, h, c4, r2, 7, K_DONE, "DONE", "to radio")->big = true;
+        grid(GAP, y, w, h, c4, menu_rows, 3, K_TILE + P_BW, "AUDIO", v)->big = true;
+        grid(GAP, y, w, h, c4, menu_rows, 4, K_TILE + P_BAND, "BAND", c->band >= 0 ? s_band[c->band].name : "presets")->big = true;
+        grid(GAP, y, w, h, c4, menu_rows, 5, K_TILE + P_SCAN, "SCAN", "Wi-Fi, BLE, memory")->big = true;
+        grid(GAP, y, w, h, c4, menu_rows, 6, K_TILE + P_LOOK, "LOOK", view_theme_name(view_theme()))->big = true;
+        grid(GAP, y, w, h, c4, menu_rows, 7, K_TILE + P_RF, "RF INPUT",
+             c->bias_error ? (c->bias_forced ? "BIAS ? EEPROM ON" : "BIAS ? RETRY OFF")
+                           : c->bias ? "BIAS-T ON" : "bias off")->big = true;
+        grid(GAP, y, w, h, c4, menu_rows, 8, K_DONE, "DONE", "to radio")->big = true;
         return;
     }
     /* sub page: BACK + title, then the body */
@@ -174,6 +179,24 @@ static void build(const ctl_t *c)
         for (int i = 0; i < PANEL_ZOOMS; i++)
             grid(GAP, by, bw, bh, 2, 2, i, K_ZOOM + i, s_zoom_lbl[i], s_zoom_sub[i])->sel = i == c->zoom;
         break;
+    case P_RF: {
+        int half = (bh - GAP) / 2;
+        pkey_t *off = grid(GAP, by, bw, half, 2, 1, 0, K_BIAS_OFF, "BIAS-T OFF",
+                           c->bias_error ? (c->bias_forced ? "EEPROM FORCES ON" : "POWER ? RETRY OFF")
+                                         : "no antenna power");
+        off->sel = !c->bias && !c->bias_error; off->disabled = c->bias_forced;
+        grid(GAP, by, bw, half, 2, 1, 1, K_BIAS_ON, "BIAS-T ON", "4.5V ACTIVE LNA ONLY")
+            ->sel = c->bias && !c->bias_error;
+        static const char *names[3] = {"TUNER", "ADC I", "ADC Q"};
+        for (int i = 0; i < 3; i++) {
+            pkey_t *k = grid(GAP, by + half + GAP, bw, bh - half - GAP, 3, 1, i,
+                              K_DIRECT + i, names[i],
+                              i && !c->direct_supported ? "V4: USE TUNER" : i ? "wired ADC only" : "V4 HF mixer/auto");
+            k->sel = i == c->direct;
+            k->disabled = i && !c->direct_supported;
+        }
+        break;
+    }
     case P_BW: {                             /* filter and mode, then volume and squelch */
         int hm = p ? (bh - 3 * GAP) / 2 : (bh - 2 * GAP) * 40 / 100, hs = (bh - hm - 2 * GAP) / 2;
         for (int i = 0; i < PANEL_BWS; i++)
@@ -239,7 +262,8 @@ static void draw_key(const rpi_canvas_t *c, const pkey_t *k, bool hot)
     int r = K.square ? 0 : 8;
     bool label = k->id == K_LABEL;
     uint16_t fill = k->sel ? K.btn_on : hot ? rpi_mix565(K.btn, K.btn_on, 110) : K.btn;
-    uint16_t fg = k->sel ? K.txt_on : K.key_txt, sub = rpi_mix565(fill, fg, 170);
+    uint16_t fg = k->sel ? K.txt_on : k->disabled ? K.dim : K.key_txt;
+    uint16_t sub = rpi_mix565(fill, fg, 170);
     if (label) { fill = K.bg; fg = K.accent; sub = K.dim; }
     else {
         rpi_cv_rrect(c, k->x, k->y, k->w, k->h, r, hot ? K.btn_on : K.edge);
@@ -316,7 +340,7 @@ static int hit(int x, int y)
     y -= K.top;
     for (int i = 0; i < s_nk; i++) {
         const pkey_t *k = &s_k[i];
-        if (k->id == K_LABEL) continue;
+        if (k->id == K_LABEL || k->disabled) continue;
         if (x >= k->x - GAP / 2 - 1 && x < k->x + k->w + GAP / 2 + 1 &&
             y >= k->y - GAP / 2 - 1 && y < k->y + k->h + GAP / 2 + 1) return i;
     }
@@ -341,7 +365,7 @@ static int act(ctl_t *c, int id, bool *page_change)
     if (id == K_WIFI) return CTL_WIFI;
     if (id == K_BLE) return CTL_BLE;
     if (id == K_TURN) return CTL_TURN;
-    if (id >= K_TILE && id < K_TILE + 8) { s_page = id - K_TILE; *page_change = true; return 0; }
+    if (id >= K_TILE && id < K_TILE + 11) { s_page = id - K_TILE; *page_change = true; return 0; }
     if (id == K_MEMORY || id == K_SAVE) { s_page = id == K_SAVE ? P_SAVE : P_MEM; *page_change = true; return 0; }
     if (id == K_MSCAN) {
         for (int i = 0; i < PANEL_MEMS; i++) if (c->mem_hz[i]) return CTL_MEM_SCAN;
@@ -358,6 +382,22 @@ static int act(ctl_t *c, int id, bool *page_change)
             return CTL_MEM_SAVE;
         }
         return c->mem_hz[i] ? CTL_MEM_TUNE : 0;
+    }
+    if (id == K_BIAS_OFF || id == K_BIAS_ON) {
+        bool on = id == K_BIAS_ON;
+        if (c->bias_forced && !on) return 0;
+        if (c->bias == on && !c->bias_error) return 0;
+        c->bias = on;
+        *page_change = true;
+        return CTL_BIAS;
+    }
+    if (id >= K_DIRECT && id < K_DIRECT + 3) {
+        int mode = id - K_DIRECT;
+        if (mode && !c->direct_supported) return 0;
+        if (mode == c->direct) return 0;
+        c->direct = mode;
+        *page_change = true;
+        return CTL_DIRECT;
     }
     if (c->gain_n > 1 && (id == K_GAIN_DN || id == K_GAIN_UP)) {
         int g = c->gain_idx;

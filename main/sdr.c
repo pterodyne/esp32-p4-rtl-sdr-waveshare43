@@ -11,6 +11,8 @@
 #include "rtlsdr_usb.h"
 #include "usb/usb_host.h"
 #include "sdr.h"
+#include "rf_policy.h"
+#include "bias_state.h"
 
 static const char *TAG = "sdr";
 
@@ -19,6 +21,9 @@ static const char *TAG = "sdr";
 #define RING_LEN  (1 << 20)                   /* 218 ms of IQ */
 
 static rtlsdr_dev_t *s_dev;
+static bias_state_t s_bias;
+static bool s_bias_forced, s_direct_supported;
+static int s_direct_mode;                    /* manual I/Q survives USB reopen; bias does not */
 static uint8_t *s_ring;
 static volatile uint64_t s_wr;                /* total bytes written into the ring */
 static volatile bool s_streaming;
@@ -99,6 +104,24 @@ bool sdr_open(uint32_t timeout_ms, char *desc, size_t desc_len)
     if (r < 0) { ESP_LOGE(TAG, "rtlsdr_open %d", r); s_dev = NULL; return false; }
     rtlsdr_set_sample_rate(s_dev, s_rate);
     rtlsdr_set_center_freq(s_dev, s_freq);
+    char manufacturer[256] = {0}, product[256] = {0};
+    if (rtlsdr_get_usb_strings(s_dev, manufacturer, product, NULL) < 0) {
+        manufacturer[0] = product[0] = 0;
+    }
+    s_direct_supported = rf_direct_sampling_supported(rtlsdr_get_tuner_type(s_dev), manufacturer, product);
+    if (!s_direct_supported) s_direct_mode = 0;
+    else if (s_direct_mode && rtlsdr_set_direct_sampling(s_dev, s_direct_mode)) {
+        ESP_LOGE(TAG, "could not restore direct ADC mode %d", s_direct_mode);
+        s_direct_mode = 0;
+        rtlsdr_set_direct_sampling(s_dev, 0);
+    }
+    s_bias_forced = rtlsdr_get_bias_tee_forced(s_dev) > 0;
+    /* Never automatically re-energize the antenna on a USB reconnect. */
+    s_bias = (bias_state_t){.on = s_bias_forced};
+    bool bias_ok = rtlsdr_set_bias_tee(s_dev, s_bias_forced) == 0;
+    bias_state_note_result(&s_bias, s_bias_forced, bias_ok);
+    if (!bias_ok) ESP_LOGW(TAG, "bias-tee GPIO command failed: antenna power state unknown");
+    if (s_bias_forced) ESP_LOGW(TAG, "bias tee forced ON by dongle EEPROM; UI cannot turn it off");
     setup_gains();
     sdr_set_gain_tenths(s_want_tenths);
     if (desc) {
@@ -111,11 +134,23 @@ bool sdr_open(uint32_t timeout_ms, char *desc, size_t desc_len)
     return true;
 }
 
-void sdr_close(void)
+bool sdr_close(void)
 {
     sdr_stop();
+    if (s_rx_task) {
+        ESP_LOGE(TAG, "RX task did not stop: refusing to close an active USB device");
+        return false;
+    }
+    if (s_dev && !s_bias_forced) {
+        bool off_ok = rtlsdr_set_bias_tee(s_dev, 0) == 0;
+        bias_state_note_result(&s_bias, false, off_ok);
+        if (!off_ok) ESP_LOGW(TAG, "bias-tee OFF failed on close: antenna power state unknown");
+    }
     if (s_dev) rtlsdr_close(s_dev);
     s_dev = NULL;
+    s_bias.command_ok = false;
+    s_bias_forced = s_direct_supported = false;
+    return true;
 }
 
 void sdr_start(void)
@@ -216,6 +251,45 @@ void sdr_set_sample_rate(uint32_t hz)
 }
 
 uint32_t sdr_sample_rate(void) { return s_rate; }
+
+bool sdr_bias_tee(void) { return s_bias.on; }
+bool sdr_bias_command_ok(void) { return s_bias.command_ok; }
+bool sdr_bias_tee_forced(void) { return s_bias_forced; }
+bool sdr_direct_supported(void) { return s_direct_supported; }
+int sdr_direct_mode(void) { return s_direct_mode; }
+
+bool sdr_set_bias_tee(bool on)
+{
+    if (!s_dev || (s_bias_forced && !on)) return false;
+    if (!bias_state_needs_command(&s_bias, on)) return true;
+    bool ok = rtlsdr_set_bias_tee(s_dev, on) == 0;
+    bias_state_note_result(&s_bias, on, ok);
+    if (!ok) return false;
+    ESP_LOGI(TAG, "bias tee %s", on ? "ON" : "OFF");
+    return true;
+}
+
+bool sdr_set_direct_mode(int mode)
+{
+    if (!s_dev || mode < 0 || mode > 2 || (mode && !s_direct_supported)) return false;
+    if (mode == s_direct_mode) return true;
+    bool was_streaming = s_rx_task != NULL;
+    if (was_streaming) {
+        sdr_stop();                       /* tuner init/exit and demod registers: no active USB IQ */
+        if (s_rx_task) return false;     /* failed to quiesce; leave hardware untouched */
+    }
+    int old = s_direct_mode;
+    int r = rtlsdr_set_direct_sampling(s_dev, mode);
+    if (r != 0) {
+        ESP_LOGE(TAG, "direct ADC mode %d failed (%d), reverting", mode, r);
+        rtlsdr_set_direct_sampling(s_dev, old);
+    } else {
+        s_direct_mode = mode;
+        ESP_LOGI(TAG, "ADC input: %s", mode == 1 ? "direct I" : mode == 2 ? "direct Q" : "tuner/auto");
+    }
+    if (was_streaming) sdr_start();
+    return r == 0;
+}
 
 size_t sdr_ring_read(uint8_t *dst, uint64_t *pos, size_t max, uint64_t *dropped)
 {

@@ -137,7 +137,11 @@ static const theme_t s_themes[] = {
 #define MAX_WF_H   LCD_LONG
 #define AUDIO_CTRL_W 208
 #define AUDIO_CTRL_H 72
+#ifdef CONFIG_SDR_WAVESHARE_43
+#define FOOTER_H 112
+#else
 #define FOOTER_H 80
+#endif
 
 static const theme_t *T = &s_themes[0];
 static int s_spec_y, s_axis_y, s_wf_y, s_wf_h;
@@ -157,7 +161,7 @@ static float s_ref = -20, s_range = 60;                /* manual: top of the sca
 static uint16_t *s_hdr, *s_axis, *s_spec;
 static uint16_t *s_audio_ctrl;
 static bool s_footer_valid;
-static int s_footer_vol, s_footer_sql, s_footer_bw, s_footer_pressed;
+static int s_footer_vol, s_footer_sql, s_footer_bw, s_footer_zoom, s_footer_pressed;
 static uint16_t *s_wf;                       /* 2*wf_h rows, each line stored twice */
 static int s_wf_head;
 static float s_col[LCD_LONG], s_smooth[LCD_LONG], s_peak[LCD_LONG];
@@ -273,7 +277,7 @@ static button_t mode_button(int i)
     int mw = LCD_W - AUDIO_CTRL_W - 18;
     int kw = (mw - (cols - 1) * 4) / cols;
     int x = 6 + i % cols * (kw + 4);
-    int y = cols == 6 ? 14 : 6 + i / cols * 36;
+    int y = FOOTER_H - 80 + (cols == 6 ? 14 : 6 + i / cols * 36);
     return (button_t){x, y, kw, cols == 6 ? 52 : 32, NULL};
 }
 
@@ -284,6 +288,19 @@ int view_mode_button_at(int x, int y)
         button_t b = mode_button(i);
         if (x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h) return VIEW_MODE_0 + i;
     }
+    return -1;
+}
+
+int view_zoom_button_at(int x, int y)
+{
+#ifdef CONFIG_SDR_WAVESHARE_43
+    int mw = LCD_W - AUDIO_CTRL_W - 18;
+    y -= LCD_H - FOOTER_H;
+    if (y >= 4 && y < 32) {
+        if (x >= 6 && x < 54) return VIEW_ZOOM_DN;
+        if (x >= mw - 48 && x < mw) return VIEW_ZOOM_UP;
+    }
+#endif
     return -1;
 }
 
@@ -299,13 +316,31 @@ int view_audio_button_at(int x, int y)
     return row ? (col ? VIEW_SQL_UP : VIEW_SQL_DN) : (col ? VIEW_VOL_UP : VIEW_VOL_DN);
 }
 
-void view_audio_controls(int vol, int sql, int bw, int pressed)
+void view_audio_controls(int vol, int sql, int bw, int zoom, int pressed)
 {
     if (s_footer_valid && s_footer_vol == vol && s_footer_sql == sql &&
-        s_footer_bw == bw && s_footer_pressed == pressed) return;
+        s_footer_bw == bw && s_footer_zoom == zoom && s_footer_pressed == pressed) return;
     rpi_canvas_t c = {s_audio_ctrl, LCD_W, FOOTER_H};
     rpi_cv_fill(&c, 0, 0, LCD_W, FOOTER_H, T->plate);
     rpi_cv_fill(&c, 0, 0, LCD_W, 1, T->hdr_line);
+#ifdef CONFIG_SDR_WAVESHARE_43
+    int mw = LCD_W - AUDIO_CTRL_W - 18;
+    static const char *zoom_labels[PANEL_ZOOMS] = {"2.4 MHz", "1.2 MHz", "600 kHz", "300 kHz"};
+    int z = zoom >= 0 && zoom < PANEL_ZOOMS ? zoom : 0;
+    char zl[24];
+    snprintf(zl, sizeof zl, "ZOOM %s", zoom_labels[z]);
+    for (int i = 0; i < 2; i++) {
+        int bx = i ? mw - 48 : 6;
+        int id = i ? VIEW_ZOOM_UP : VIEW_ZOOM_DN;
+        bool on = pressed == id;
+        rpi_cv_rrect(&c, bx, 4, 48, 28, T->hdr == HDR_PORTAPACK ? 0 : 4,
+                     on ? T->btn_on : T->btn);
+        const char *sign = i ? "+" : "-";
+        rpi_cv_text(&c, bx + (48 - rpi_cv_text_w(sign, 1)) / 2, 10,
+                    sign, on ? btn_text(true) : T->txt, 1);
+    }
+    rpi_cv_text(&c, 60 + (mw - 114 - rpi_cv_text_w(zl, 1)) / 2, 10, zl, T->txt, 1);
+#endif
     static const char *modes[PANEL_BWS] = {"WFM", "NFM25", "NFM12", "AM", "USB", "LSB"};
     for (int i = 0; i < PANEL_BWS && mode_cols(); i++) {
         button_t b = mode_button(i);
@@ -317,7 +352,7 @@ void view_audio_controls(int vol, int sql, int bw, int pressed)
     }
     int ox = audio_x();
     for (int row = 0; row < 2; row++) {
-        int y = 4 + row * 33;
+        int y = FOOTER_H - 80 + 4 + row * 33;
         char text[20];
         if (!row) snprintf(text, sizeof text, "VOL %d", vol);
         else if (sql) snprintf(text, sizeof text, "SQL %d", sql);
@@ -334,7 +369,8 @@ void view_audio_controls(int vol, int sql, int bw, int pressed)
         }
     }
     rpi_lcd_blit(0, LCD_H - FOOTER_H, LCD_W, FOOTER_H, s_audio_ctrl);
-    s_footer_vol = vol; s_footer_sql = sql; s_footer_bw = bw; s_footer_pressed = pressed;
+    s_footer_vol = vol; s_footer_sql = sql; s_footer_bw = bw;
+    s_footer_zoom = zoom; s_footer_pressed = pressed;
     s_footer_valid = true;
 }
 

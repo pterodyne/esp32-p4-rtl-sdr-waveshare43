@@ -871,13 +871,13 @@ int rtlsdr_read_eeprom(rtlsdr_dev_t *dev, uint8_t *data, uint8_t offset, uint16_
 		return -2;
 
 	r = rtlsdr_write_array(dev, IICB, EEPROM_ADDR, &offset, 1);
-	if (r < 0)
+	if (r != 1)
 		return -3;
 
 	for (i = 0; i < len; i++) {
 		r = rtlsdr_read_array(dev, IICB, EEPROM_ADDR, data + i, 1);
 
-		if (r < 0)
+		if (r != 1)
 			return -3;
 	}
 
@@ -1693,7 +1693,7 @@ found:
 	* bit in the EEPROM to 0. Default on EEPROM is 1.
 	*/
 	r = rtlsdr_read_eeprom(dev, buf, 0, EEPROM_SIZE);
-	dev->force_bt = (buf[7] & 0x02) ? 0 : 1;
+	dev->force_bt = r == 1 && !(buf[7] & 0x02); /* unread EEPROM must never energize antenna */
 	if(dev->force_bt)
 		rtlsdr_set_bias_tee(dev, 1);
 
@@ -2091,9 +2091,21 @@ int rtlsdr_i2c_read_fn(void *dev, uint8_t addr, uint8_t *buf, int len)
 	return -1;
 }
 
+/* Unlike the older void GPIO helpers, report short/failed USB transfers to
+ * callers controlling antenna power. Never claim a Bias-T change succeeded
+ * when the GPIO writes did not complete. */
+static int rtlsdr_update_gpio_checked(rtlsdr_dev_t *dev, uint16_t reg, uint8_t mask, int set)
+{
+	uint8_t value = 0;
+	if (rtlsdr_read_array(dev, SYSB, reg, &value, 1) != 1)
+		return -1;
+	value = set ? (value | mask) : (value & ~mask);
+	return rtlsdr_write_array(dev, SYSB, reg, &value, 1) == 1 ? 0 : -1;
+}
+
 int rtlsdr_set_bias_tee_gpio(rtlsdr_dev_t *dev, int gpio, int on)
 {
-	if (!dev)
+	if (!dev || gpio < 0 || gpio > 7)
 		return -1;
 
 	/* If it's the bias tee GPIO, and force bias tee is on
@@ -2102,8 +2114,11 @@ int rtlsdr_set_bias_tee_gpio(rtlsdr_dev_t *dev, int gpio, int on)
 	if(gpio == 0 && dev->force_bt)
 		on = 1;
 
-	rtlsdr_set_gpio_output(dev, gpio);
-	rtlsdr_set_gpio_bit(dev, gpio, on);
+	uint8_t mask = 1u << gpio;
+	if (rtlsdr_update_gpio_checked(dev, GPD, mask, 0) < 0 ||
+	    rtlsdr_update_gpio_checked(dev, GPOE, mask, 1) < 0 ||
+	    rtlsdr_update_gpio_checked(dev, GPO, mask, on) < 0)
+		return -1;
 
 	return 0;
 }
@@ -2111,4 +2126,9 @@ int rtlsdr_set_bias_tee_gpio(rtlsdr_dev_t *dev, int gpio, int on)
 int rtlsdr_set_bias_tee(rtlsdr_dev_t *dev, int on)
 {
 	return rtlsdr_set_bias_tee_gpio(dev, 0, on);
+}
+
+int rtlsdr_get_bias_tee_forced(rtlsdr_dev_t *dev)
+{
+	return dev ? dev->force_bt : -1;
 }

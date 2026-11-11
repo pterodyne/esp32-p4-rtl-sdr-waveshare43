@@ -13,7 +13,10 @@ touch through 0°, 90°, 180° and 270° clockwise from the native portrait
 orientation; the choice is saved for the next boot. Four-way rotation has been
 confirmed working on the user's rev3 board.
 
-The waterfall stops above a fixed **80-pixel footer**: six mode buttons
+The waterfall stops above a fixed **112-pixel footer**: a **ZOOM −/+** row
+changes the spectrum/waterfall's horizontal span through 2.4 MHz, 1.2 MHz,
+600 kHz and 300 kHz (hold to repeat). The vertical dB scale is still under
+**MENU → RANGE**. Six mode buttons
 (WFM, NFM25, NFM12, AM, USB, LSB) are on the left and **VOL −/+** and
 **SQL −/+** on the right. Hold an audio key to repeat. Volume ranges from
 0 (off) to 10 and squelch from 0 (open) to 9; **MENU → AUDIO** also offers
@@ -29,6 +32,23 @@ is not yet confirmed**; if flashing remains, capture the UART log around the
 event (especially stream restart and USB error messages). **Set SQL to OPEN
 (0) for SSB**: its nonzero power-based squelch may mute speech and does not
 discriminate sidebands.
+
+**MENU → RF INPUT** adds Bias-T OFF/ON and direct-ADC TUNER/I/Q choices.
+Bias-T supplies about 4.5 V to a **compatible active antenna or LNA** via
+the dongle's antenna socket; the firmware commands OFF after every boot or USB
+reconnection and does not store ON in settings. A failed USB command leaves
+antenna power **unknown**, not confirmed OFF: RF INPUT shows "BIAS ? RETRY OFF"
+and its OFF key retries the write. A successful USB write does not measure
+antenna voltage; check the socket with a meter if safety depends on it.
+Do **not** turn it on with a DC-shorted antenna,
+and check your USB power budget—battery operation with this board/dongle has
+already browned out. If the dongle's EEPROM forces Bias-T ON, the OFF key is
+disabled and the EEPROM setting must be changed separately. The RF page shows
+ADC I/Q choices but disables them for the **RTL-SDR Blog V4/V4L**, whose HF
+path uses a built-in upconverter instead of direct sampling; simply tune the
+V4 to the HF frequency in TUNER mode. On other dongles, I/Q only works if the
+corresponding ADC input is physically wired. Direct mode, unlike Bias-T, is
+saved and reapplied after device reopen. See the [V4 user's guide](https://www.rtl-sdr.com/v4/).
 
 ## Hardware status
 

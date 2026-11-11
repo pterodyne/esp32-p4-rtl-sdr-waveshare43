@@ -144,7 +144,7 @@ static int gain_tenths(int i) { return i <= 0 ? -1 : s_g[(i - 1) % 29]; }
 
 static const char *gain_label(int i)
 {
-    static char b[16];
+    static char b[24];
     if (i <= 0) return "AGC";
     snprintf(b, sizeof b, "%d.%d dB", gain_tenths(i) / 10, gain_tenths(i) % 10);
     return b;
@@ -187,7 +187,7 @@ static void render_all(const char *dir, const char *tag, uint32_t freq, int pres
             view_render(db, NFFT, freq);
         }
         view_blit();
-        view_audio_controls(5, 2, 4, -1);
+        view_audio_controls(5, 2, 4, 0, -1);
         char path[512];
         snprintf(path, sizeof path, "%s/%s%s.png", dir, tag, view_theme_name(t));
         write_png(path, fb, LCD_W, LCD_H);
@@ -202,10 +202,10 @@ static void render_all(const char *dir, const char *tag, uint32_t freq, int pres
         ox += LCD_W + gap;
         for (int y = 0; y < LCD_H; y++) memcpy(&sheet[(oy + y) * SW + ox], &FB(0, y), LCD_W * 2);
         /* every sub page: tap its menu tile, save, tap BACK */
-        static const char *pg[] = {"gain", "range", "zoom", "audio", "band", "scan", "look"};
-        int cols = LCD_PORTRAIT ? 2 : 4, rows = 8 / cols, top = view_tune_y(), ph = LCD_H - top;
+        static const char *pg[] = {"gain", "range", "zoom", "audio", "band", "scan", "look", "rf"};
+        int cols = LCD_PORTRAIT ? 2 : 4, rows = LCD_PORTRAIT ? 5 : 3, top = view_tune_y(), ph = LCD_H - top;
         int cw = (LCD_W - 12 - 6 * (cols - 1)) / cols, chh = (ph - 12 - 6 * (rows - 1)) / rows;
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < 8; i++) {
             int tx = 6 + cw / 2 + (i % cols) * (cw + 6), ty = top + 6 + chh / 2 + (i / cols) * (chh + 6);
             panel_touch(&ct, PANEL_PRESS, tx, ty, 0);
             panel_touch(&ct, PANEL_RELEASE, tx, ty, 0);
@@ -384,15 +384,31 @@ static void test_audio_controls(void)
         for (int theme = 0; theme < view_themes(); theme++) {
             view_set_theme(theme);
             view_blit_waterfall();
-            assert(s_last_y + s_last_h == LCD_H - 80); /* static footer is never wiped by waterfall */
-            view_audio_controls(5, 2, 4, -1);
+#ifdef CONFIG_SDR_WAVESHARE_43
+            assert(s_last_y + s_last_h == LCD_H - 112); /* zoom and modes never get waterfall pixels */
+#else
+            assert(s_last_y + s_last_h == LCD_H - 80);
+#endif
+            view_audio_controls(5, 2, 4, 0, -1);
             int drawn = s_blit_count;
-            view_audio_controls(5, 2, 4, -1);
+            view_audio_controls(5, 2, 4, 0, -1);
             assert(s_blit_count == drawn); /* untouched footer is not blitted every frame */
             view_blit_waterfall();
             drawn = s_blit_count;
-            view_audio_controls(5, 2, 4, -1);
+            view_audio_controls(5, 2, 4, 0, -1);
             assert(s_blit_count == drawn); /* waterfall refresh cannot invalidate footer */
+#ifdef CONFIG_SDR_WAVESHARE_43
+            int zy = LCD_H - 112 + 18;
+            int mw = LCD_W - 208 - 18;
+            assert(view_zoom_button_at(30, zy) == VIEW_ZOOM_DN);
+            assert(view_zoom_button_at(mw - 24, zy) == VIEW_ZOOM_UP);
+            assert(view_zoom_button_at(mw / 2, zy) == -1);
+            assert(view_mode_button_at(30, zy) == -1);
+            assert(view_audio_button_at(30, zy) == -1);
+            view_audio_controls(5, 2, 4, 1, -1);
+            assert(s_blit_count > drawn); /* changing scale refreshes the static zoom label */
+            view_audio_controls(5, 2, 4, 0, -1);
+#endif
             size_t header_bytes = (size_t)LCD_W * view_tune_y() * sizeof(uint16_t);
             uint16_t *old_header = malloc(header_bytes);
             assert(old_header);
@@ -431,7 +447,12 @@ static void test_audio_controls(void)
             assert(view_audio_overlay_at(x + 20, y + 19));
             assert(view_audio_overlay_at(x + 208 - 1, y + 71));
             assert(view_audio_overlay_at(x - 1, y + 19)); /* mode region also blocks tuning */
+#ifdef CONFIG_SDR_WAVESHARE_43
+            assert(view_audio_overlay_at(x + 20, y - 1)); /* zoom strip also blocks tuning */
+            assert(!view_audio_overlay_at(x + 20, LCD_H - 113));
+#else
             assert(!view_audio_overlay_at(x + 20, y - 1));
+#endif
             int cols = LCD_W >= 700 ? 6 : LCD_W >= 480 ? 3 : 0;
             if (cols) {
                 int mw = LCD_W - 208 - 18;
@@ -443,12 +464,12 @@ static void test_audio_controls(void)
                     assert(view_audio_button_at(bx, by) == -1);
                 }
             }
-            view_audio_controls(5, 2, 4, -1);
+            view_audio_controls(5, 2, 4, 0, -1);
         }
         ctl_t ct = {.gain_idx = 0, .gain_n = 30, .gain_label = gain_label,
                     .gain_tenths = gain_tenths, .range_auto = true, .vol = 5};
         panel_open(&ct);
-        int cols = LCD_PORTRAIT ? 2 : 4, rows = 8 / cols;
+        int cols = LCD_PORTRAIT ? 2 : 4, rows = LCD_PORTRAIT ? 5 : 3;
         int cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
         int ch = (LCD_H - view_tune_y() - 12 - 6 * (rows - 1)) / rows;
         int menu_x = 6 + 3 % cols * (cw + 6) + cw / 2;
@@ -502,7 +523,7 @@ static void test_phosphor_green(void)
         view_set_audio("USB 5", true);
         view_render(db, 1024, 142000100);
         view_blit();
-        view_audio_controls(5, 2, 4, -1);
+        view_audio_controls(5, 2, 4, 0, -1);
         for (int i = 0; i < LCD_W * LCD_H; i++)
             assert(!(fb[i] & (0xf800 | 0x001f))); /* zero red and blue in RGB565 */
         ctl_t ct = {.gain_idx = 0, .gain_n = 30, .gain_label = gain_label,
@@ -526,7 +547,7 @@ static void test_footer_stream_recovery(void)
 {
     view_init(RATE);
     view_set_theme(0);
-    view_audio_controls(5, 2, 4, -1);
+    view_audio_controls(5, 2, 4, 0, -1);
     int x = LCD_W / 2, y = LCD_H - 40;
     uint16_t expected = FB(x, y);
     view_message("RTL-SDR not streaming", "USB link lost");
@@ -535,10 +556,61 @@ static void test_footer_stream_recovery(void)
     view_axis(142000100);
     view_blit();
     int drawn = s_blit_count;
-    view_audio_controls(5, 2, 4, -1);
+    view_audio_controls(5, 2, 4, 0, -1);
     assert(s_blit_count > drawn); /* footer must be restored without a value change */
     assert(FB(x, y) == expected);
     puts("stream recovery restores footer after the message clears it");
+}
+
+static void test_rf_settings(void)
+{
+    view_init(RATE);
+    panel_init();
+    for (int portrait = 0; portrait < 2; portrait++) {
+        rpi_lcd_set_portrait(portrait != 0);
+        view_set_theme(0);
+        ctl_t ct = {.gain_idx = 0, .gain_n = 30, .gain_label = gain_label,
+                    .gain_tenths = gain_tenths, .direct_supported = false};
+        panel_open(&ct);
+        int cols = LCD_PORTRAIT ? 2 : 4, rows = LCD_PORTRAIT ? 5 : 3;
+        int cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
+        int ch = (LCD_H - view_tune_y() - 12 - 6 * (rows - 1)) / rows;
+        int x = 6 + 7 % cols * (cw + 6) + cw / 2;
+        int y = view_tune_y() + 6 + 7 / cols * (ch + 6) + ch / 2;
+        panel_touch(&ct, PANEL_PRESS, x, y, 0);
+        panel_touch(&ct, PANEL_RELEASE, x, y, 0); /* RF tile */
+        int body = LCD_H - view_tune_y() - 62;
+        int half = (body - 6) / 2;
+        int bias_y = view_tune_y() + 56 + half / 2;
+        x = 6 + (LCD_W - 18) / 2 + 6 + (LCD_W - 18) / 4;
+        panel_touch(&ct, PANEL_PRESS, x, bias_y, 0);
+        assert((panel_touch(&ct, PANEL_RELEASE, x, bias_y, 0) & CTL_BIAS) && ct.bias);
+        panel_touch(&ct, PANEL_PRESS, 60, bias_y, 0);
+        assert((panel_touch(&ct, PANEL_RELEASE, 60, bias_y, 0) & CTL_BIAS) && !ct.bias);
+        ct.bias_error = true;
+        panel_redraw(&ct);
+        panel_touch(&ct, PANEL_PRESS, 60, bias_y, 0);
+        assert(panel_touch(&ct, PANEL_RELEASE, 60, bias_y, 0) & CTL_BIAS);
+        assert(!ct.bias); /* OFF retries despite last requested state being OFF */
+        ct.bias_error = false;
+        panel_redraw(&ct);
+        int dw = (LCD_W - 12 - 12) / 3;
+        int direct_y = view_tune_y() + 56 + half + 6 + (body - half - 6) / 2;
+        x = 6 + 2 * (dw + 6) + dw / 2;
+        panel_touch(&ct, PANEL_PRESS, x, direct_y, 0);
+        assert(!(panel_touch(&ct, PANEL_RELEASE, x, direct_y, 0) & CTL_DIRECT));
+        assert(ct.direct == 0); /* Blog V4 uses its HF upconverter instead */
+        ct.direct_supported = true;
+        panel_redraw(&ct);
+        panel_touch(&ct, PANEL_PRESS, x, direct_y, 0);
+        assert((panel_touch(&ct, PANEL_RELEASE, x, direct_y, 0) & CTL_DIRECT) && ct.direct == 2);
+        ct.bias = true; ct.bias_forced = true;
+        panel_redraw(&ct);
+        panel_touch(&ct, PANEL_PRESS, 60, bias_y, 0);
+        assert(!(panel_touch(&ct, PANEL_RELEASE, 60, bias_y, 0) & CTL_BIAS));
+        assert(ct.bias);
+    }
+    puts("RF settings: bias, I/Q selection, V4 and EEPROM restrictions in both orientations");
 }
 
 int main(int argc, char **argv)
@@ -546,6 +618,7 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "--test-audio")) { test_audio_controls(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-phosphor")) { test_phosphor_green(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-footer-recovery")) { test_footer_stream_recovery(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "--test-rf")) { test_rf_settings(); return 0; }
     if (argc > 2 && !strcmp(argv[1], "--audio-snapshot")) {
         static float db[1024];
         view_init(RATE);
@@ -564,7 +637,7 @@ int main(int argc, char **argv)
             view_render(db, 1024, 142000100);
         }
         view_blit();
-        view_audio_controls(5, 2, 4, -1);
+        view_audio_controls(5, 2, 4, 0, -1);
         write_png(argv[2], fb, LCD_W, LCD_H);
         printf("%s\n", argv[2]);
         return 0;

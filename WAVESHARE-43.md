@@ -14,13 +14,22 @@ on load. Landscape draws in software, so it may be slower than portrait.
 The user has confirmed all four rotations work on a rev3 board. The previous
 floating waterfall VOL/SQL controls flickered on board and the interface was
 reported to flash every few seconds. The revised UI stops waterfall blits
-80 pixels above the bottom: fixed WFM/NFM25/NFM12/AM/USB/LSB mode buttons
+112 pixels above the bottom: a static ZOOM −/+ row changes horizontal spans
+(2.4/1.2 MHz, 600/300 kHz), and fixed WFM/NFM25/NFM12/AM/USB/LSB mode buttons
 sit to the left of VOL/SQL steppers. Footer drawing is cached when unchanged.
 This is host-tested and cross-built but **not yet verified on the board**; if
 flashing continues, inspect UART logs for stream restarts and USB errors.
 The Waveshare header has six tuning keys: ±1 MHz, ±100 kHz, ±10 kHz for
 AM/FM, or ±1 MHz, ±1 kHz, ±100 Hz for SSB. Phosphor uses only green RGB565.
 Use the footer or **MENU → AUDIO** for 3 kHz USB/LSB reception.
+**MENU → RF INPUT** adds Bias-T and TUNER/ADC I/ADC Q. The firmware commands
+Bias-T OFF on boot and USB reconnect (unless EEPROM forces it ON), but a failed
+USB write leaves power unknown: RF INPUT shows "BIAS ? RETRY OFF" and OFF retries.
+A completed USB command does not measure antenna voltage. Bias-T is not persisted;
+only enable it for a compatible active antenna/LNA with adequate USB supply. On Blog V4
+and V4L the ADC I/Q keys are shown but disabled: HF uses the onboard
+upconverter, and forcing direct sampling yields no RF input. Other dongles
+require the selected ADC input to be physically wired. Direct mode is persisted.
 SSB currently has a fixed audio gain rather than speech AGC; set SQL to OPEN
 (0) because its power-based squelch can mute an already-present voice signal.
 

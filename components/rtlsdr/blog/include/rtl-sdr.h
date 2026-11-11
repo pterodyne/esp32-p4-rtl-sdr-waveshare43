@@ -393,7 +393,7 @@ RTLSDR_API int rtlsdr_cancel_async(rtlsdr_dev_t *dev);
  *
  * \param dev the device handle given by rtlsdr_open()
  * \param on  1 for Bias T on. 0 for Bias T off.
- * \return -1 if device is not initialized. 0 otherwise.
+ * \return 0 on completed GPIO writes, -1 for device or USB transfer error.
  */
 RTLSDR_API int rtlsdr_set_bias_tee(rtlsdr_dev_t *dev, int on);
 
@@ -403,9 +403,13 @@ RTLSDR_API int rtlsdr_set_bias_tee(rtlsdr_dev_t *dev, int on);
  * \param dev the device handle given by rtlsdr_open()
  * \param gpio the gpio pin to configure as a Bias T control.
  * \param on  1 for Bias T on. 0 for Bias T off.
- * \return -1 if device is not initialized. 0 otherwise.
+ * \return 0 on completed GPIO writes, -1 for device or USB transfer error.
  */
 RTLSDR_API int rtlsdr_set_bias_tee_gpio(rtlsdr_dev_t *dev, int gpio, int on);
+
+/* Read the EEPROM-forced Bias-T state latched by rtlsdr_open(), not a second
+ * potentially inconsistent USB EEPROM read. Does not measure antenna voltage. */
+RTLSDR_API int rtlsdr_get_bias_tee_forced(rtlsdr_dev_t *dev);
 
 RTLSDR_API int rtlsdr_check_dongle_model(void *dev, char *manufact_check, char *product_check);
 

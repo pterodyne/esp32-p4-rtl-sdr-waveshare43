@@ -84,6 +84,7 @@ static void settings_maybe_save(void)
     nvs_set_i32(s_nvs, "bw", s_ctl.bw);
     nvs_set_i32(s_nvs, "vol", s_ctl.vol);
     nvs_set_i32(s_nvs, "sql", s_ctl.sql);
+    nvs_set_i32(s_nvs, "direct", s_ctl.direct); /* bias tee deliberately not persisted */
     nvs_commit(s_nvs);
     ESP_LOGI(TAG, "saved %" PRIu32 " Hz, gain %s, zoom %d, bw %d", sdr_freq(),
              sdr_gain_label(sdr_gain_index()), s_ctl.zoom, s_ctl.bw);
@@ -253,6 +254,11 @@ static void panel_show(bool on)
         s_ctl.freq = sdr_freq();
         s_ctl.gain_idx = sdr_gain_index();
         s_ctl.gain_n = sdr_gain_presets();
+        s_ctl.bias = sdr_bias_tee();
+        s_ctl.bias_forced = sdr_bias_tee_forced();
+        s_ctl.bias_error = !sdr_bias_command_ok();
+        s_ctl.direct = sdr_direct_mode();
+        s_ctl.direct_supported = sdr_direct_supported();
         panel_open(&s_ctl);
     } else {
         view_axis(sdr_freq());                 /* spectrum and waterfall come back next frame */
@@ -292,6 +298,17 @@ static void turn(void)
 
 static void do_action(int act)
 {
+    if (act == VIEW_ZOOM_DN || act == VIEW_ZOOM_UP) {
+        int z = s_ctl.zoom + (act == VIEW_ZOOM_UP ? 1 : -1);
+        if (z >= 0 && z < PANEL_ZOOMS) {
+            s_ctl.zoom = z;
+            apply_view();
+            view_axis(sdr_freq());
+            settings_changed();
+        }
+        view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, s_audio_pressed);
+        return;
+    }
     if (act >= VIEW_MODE_0 && act < VIEW_MODE_0 + PANEL_BWS) {
         int bw = act - VIEW_MODE_0;
         if (s_ctl.bw != bw) {
@@ -304,7 +321,7 @@ static void do_action(int act)
             draw_header(-1);
             settings_changed();
         }
-        view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_audio_pressed);
+        view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, s_audio_pressed);
         return;
     }
     if (act >= VIEW_VOL_DN && act <= VIEW_SQL_UP) {
@@ -316,7 +333,7 @@ static void do_action(int act)
         if (act <= VIEW_VOL_UP) {
             if (prev != s_ctl.vol) { audio_set_volume(s_ctl.vol); settings_changed(); }
         } else if (prev != s_ctl.sql) { audio_set_squelch(s_ctl.sql); settings_changed(); }
-        view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_audio_pressed);
+        view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, s_audio_pressed);
         return;
     }
     uint32_t f = sdr_freq();
@@ -363,6 +380,27 @@ static void panel_event(int ev, int x, int y, int64_t now)
         sdr_set_gain_index(s_ctl.gain_idx);
         draw_header(-1);
     }
+    if (ch & CTL_BIAS) {
+        if (!sdr_set_bias_tee(s_ctl.bias)) {
+            s_ctl.bias = sdr_bias_tee();
+            s_ctl.bias_error = true;
+            panel_redraw(&s_ctl);
+            ESP_LOGW(TAG, "bias tee command rejected");
+        } else {
+            s_ctl.bias_error = false;
+            panel_redraw(&s_ctl);
+        }
+    }
+    if (ch & CTL_DIRECT) {
+        if (!sdr_set_direct_mode(s_ctl.direct)) {
+            s_ctl.direct = sdr_direct_mode();
+            panel_redraw(&s_ctl);
+            ESP_LOGW(TAG, "direct ADC selection rejected");
+        } else {
+            audio_retuned();
+            view_reset();
+        }
+    }
     if (ch & CTL_BAND) {
         uint32_t f;
         int bw, zoom;
@@ -407,7 +445,7 @@ static void poll_touch(const touch_cal_t *cal)
 {
     static bool down;
     static int n, x, y;
-    static int where;                       /* 0 header, 1 panel, 2 tuning, 3 ADS-B, 4 scanner, 5 none, 6 audio, 7 mode */
+    static int where;                       /* 0 header, 1 panel, 2 tuning, 3 ADS-B, 4 scanner, 5 none, 6 audio, 7 mode, 8 zoom */
     static int act = -1;
     static int64_t next_repeat;
     uint16_t rx, ry, rz;
@@ -418,11 +456,15 @@ static void poll_touch(const touch_cal_t *cal)
             if (where == 3) s_av_action = adsb_view_touch(AV_RELEASE, x, y);
             else if (where == 4) s_sv_action = scan_view_touch(SV_RELEASE, x, y);
             else if (where == 0 && act >= 0) draw_header(-1);
-            else if (where == 6) { s_audio_pressed = -1; view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, -1); }
+            else if (where == 6) { s_audio_pressed = -1; view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, -1); }
             else if (where == 7) {
                 s_audio_pressed = -1;
                 if (view_mode_button_at(x, y) == act) do_action(act);
-                else view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, -1);
+                else view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, -1);
+            }
+            else if (where == 8) {
+                s_audio_pressed = -1;
+                view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, -1);
             }
             else if (where == 1) panel_event(PANEL_RELEASE, x, y, now);
             else if (where == 2 && !s_panel && !view_audio_overlay_at(x, y)) {
@@ -468,7 +510,12 @@ static void poll_touch(const touch_cal_t *cal)
         } else if ((act = view_mode_button_at(x, y)) >= 0) {
             where = 7;
             s_audio_pressed = act;
-            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, act);
+            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, act);
+        } else if ((act = view_zoom_button_at(x, y)) >= 0) {
+            where = 8;
+            s_audio_pressed = act;
+            do_action(act);
+            next_repeat = now + 450000;
         } else if (view_audio_overlay_at(x, y)) {
             where = 5;                       /* label/padding: never retune underneath */
         } else {
@@ -485,14 +532,25 @@ static void poll_touch(const touch_cal_t *cal)
         int hot = view_mode_button_at(x, y) == act ? act : -1;
         if (hot != s_audio_pressed) {
             s_audio_pressed = hot;
-            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, hot);
+            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, hot);
+        }
+    }
+    else if (where == 8) {
+        int hot = view_zoom_button_at(x, y) == act ? act : -1;
+        if (hot != s_audio_pressed) {
+            s_audio_pressed = hot;
+            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, hot);
+        }
+        if (hot >= 0 && now >= next_repeat) {
+            do_action(act);
+            next_repeat = now + 150000;
         }
     }
     else if (where == 6) {
         int hot = view_audio_button_at(x, y) == act ? act : -1;
         if (hot != s_audio_pressed) {
             s_audio_pressed = hot;
-            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, hot);
+            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, hot);
         }
         if (hot >= 0 && now >= next_repeat) {
             do_action(act);
@@ -784,6 +842,14 @@ void ui_run(const touch_cal_t *cal)
     s_ctl.bw = nvs_int("bw", 0) % PANEL_BWS;
     s_ctl.vol = nvs_int("vol", 4);
     s_ctl.sql = nvs_int("sql", 0);
+    int saved_direct = nvs_int("direct", 0);
+    if (saved_direct >= 0 && saved_direct <= 2 && saved_direct != sdr_direct_mode())
+        sdr_set_direct_mode(saved_direct);     /* V4 rejects I/Q; normal tuner stays active */
+    s_ctl.direct = sdr_direct_mode();
+    s_ctl.direct_supported = sdr_direct_supported();
+    s_ctl.bias = sdr_bias_tee();
+    s_ctl.bias_forced = sdr_bias_tee_forced();
+    s_ctl.bias_error = !sdr_bias_command_ok();
     load_memories();
     apply_view();
     if (audio_init()) apply_audio();
@@ -820,7 +886,10 @@ void ui_run(const touch_cal_t *cal)
             ESP_LOGW(TAG, "stream lost: reopening the dongle");
             s_panel = false;
             view_message("RTL-SDR not streaming", "unplug and replug it if this stays");
-            sdr_close();
+            if (!sdr_close()) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue; /* retry cancellation; never reopen over an active RX task */
+            }
             vTaskDelay(pdMS_TO_TICKS(2000));
             while (!sdr_open(5000, NULL, 0)) vTaskDelay(pdMS_TO_TICKS(1000));
             restarts = 0;
@@ -843,7 +912,7 @@ void ui_run(const touch_cal_t *cal)
         poll_touch(cal);
         if (!s_panel) {
             view_blit_waterfall();
-            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_audio_pressed);
+            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, s_audio_pressed);
         }
         int64_t t2 = esp_timer_get_time();
         t_dsp += t1 - t0;
