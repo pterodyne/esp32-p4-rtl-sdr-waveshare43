@@ -19,8 +19,12 @@ reported to flash every few seconds. The revised UI stops waterfall blits
 sit to the left of VOL/SQL steppers. Footer drawing is cached when unchanged.
 This is host-tested and cross-built but **not yet verified on the board**; if
 flashing continues, inspect UART logs for stream restarts and USB errors.
-The Waveshare header has six tuning keys: ±1 MHz, ±100 kHz, ±10 kHz for
-AM/FM, or ±1 MHz, ±1 kHz, ±100 Hz for SSB. Phosphor uses only green RGB565.
+The Waveshare header has two tuning arrows and a highlighted STEP selector.
+Tap STEP to cycle 100 Hz, 1/5/9/10/12.5/25/50/100 kHz and 1 MHz; hold an
+arrow to repeat. The selected step is saved and the readout retains a 100 Hz
+digit if any adjustment leaves one. The frequency readout itself is not a look
+shortcut; use **MENU → LOOK** to change theme, which is committed immediately.
+Phosphor uses only green RGB565.
 Use the footer or **MENU → AUDIO** for 3 kHz USB/LSB reception.
 The footer **MUTE/UNMUTE** key silences the speaker without losing the saved
 volume or interrupting IQ reception; it resets to unmuted after a reboot.
@@ -32,9 +36,12 @@ only enable it for a compatible active antenna/LNA with adequate USB supply. On 
 and V4L the ADC I/Q keys are shown but disabled: HF uses the onboard
 upconverter, and forcing direct sampling yields no RF input. Other dongles
 require the selected ADC input to be physically wired. Direct mode is persisted.
-**MENU → BAND** also has North American RX presets at 315, 345, 433.92
-(the existing 433/70CM slot), and 915 MHz. Presets tune/choose an audio
-filter; they do not themselves identify or decode sensor packets.
+**MENU → BAND** paginates 30 receive presets with PREV/NEXT. It retains
+North American RX presets at 315, 345, 433.92 (the existing 433/70CM slot),
+and 915 MHz, and adds AM broadcast (600/1000/1600 kHz), ten shortwave AM
+starting points (3.95–21.6 MHz) and CB AM (channels 1/9/19/40), plus
+channel 38 USB/LSB. These are tuning/filter templates, not guaranteed active
+stations or packet decoders; the V4 HF path remains TUNER/upconverter.
 SSB currently has a fixed audio gain rather than speech AGC; set SQL to OPEN
 (0) because its power-based squelch can mute an already-present voice signal.
 

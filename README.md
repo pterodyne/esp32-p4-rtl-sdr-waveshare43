@@ -28,9 +28,11 @@ and **SQL −/+** on the right. Mute silences the speaker without changing the
 saved volume or stopping the RF stream; tap again to restore the same level.
 Hold the volume/squelch keys to repeat (mute is a single toggle). Volume ranges from
 0 (off) to 10 and squelch from 0 (open) to 9; **MENU → AUDIO** also offers
-these modes and settings. The three tuning steps per direction are
-**1 MHz / 100 kHz / 10 kHz** in AM/FM and **1 MHz / 1 kHz / 100 Hz** in SSB;
-tune SSB to the suppressed-carrier frequency. Phosphor now uses only the green
+these modes and settings. The two header arrows tune by the increment shown on
+the highlighted **STEP** button. Tap STEP to cycle **100 Hz, 1, 5, 9, 10, 12.5,
+25, 50, 100 kHz and 1 MHz**; hold either arrow to repeat. The chosen step is
+saved. The frequency readout shows the 100 Hz digit when needed; tune SSB to
+the suppressed-carrier frequency. Phosphor now uses only the green
 RGB565 channel, including its splash and status messages.
 
 The older floating audio controls were reported to flicker on hardware, and
@@ -60,9 +62,13 @@ saved and reapplied after device reopen. See the [V4 user's guide](https://www.r
 
 **MENU → BAND** includes North American receive presets at 315 MHz and
 345 MHz (low-power Part 15 devices), 433.92 MHz (the existing 433/70CM slot),
-and 915 MHz (within the 902–928 MHz ISM band). These tune the receiver and
-choose a listening filter; they are **not** packet decoders. Device protocols
-may use OOK, FSK or other modulation and need their own decoding path.
+and 915 MHz (within the 902–928 MHz ISM band). The menu is paged (**PREV/NEXT**)
+and adds AM broadcast starting points at 600/1000/1600 kHz, ten shortwave AM
+starting points from 3.95 to 21.6 MHz, and CB channels 1/9/19/40 in AM plus
+channel 38 in USB and LSB. Presets tune a **receive-only** frequency and choose
+an audio demodulator/filter; they do not guarantee a station or legal authority
+to transmit. The Blog V4's built-in HF upconverter remains in **TUNER** mode.
+ISM presets are **not** packet decoders; OOK/FSK devices need separate decoding.
 
 ## Hardware status
 

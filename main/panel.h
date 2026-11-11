@@ -9,7 +9,7 @@
  *   RANGE:  top -/+, span -/+, AUTO
  *   ZOOM: four horizontal FFT spans; AUDIO: six modes, volume and squelch -/+
  *   RF INPUT: Bias-T OFF/ON, tuner / direct ADC I / direct ADC Q (V4 I/Q disabled)
- *   BAND: existing presets + North American 315/345/915 MHz RX;  SCAN: WIFI, BLE, SAVE, MEMORY
+ *   BAND: paged RX presets incl. AM/SW/CB and North American ISM;  SCAN: WIFI, BLE, SAVE, MEMORY
  *   MEMORY: eight channel slots, tap one to tune it, SCAN to hop through them;  SAVE: tap a slot
  *   to store what's tuned now there
  * In portrait the 4-wide grids stand 2 wide.
@@ -19,7 +19,7 @@
 
 #define PANEL_ZOOMS 4
 #define PANEL_BWS   6
-#define PANEL_BANDS 11
+#define PANEL_BANDS 30
 #define PANEL_MEMS  8
 
 typedef struct {

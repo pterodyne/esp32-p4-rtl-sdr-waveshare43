@@ -36,6 +36,25 @@ static const band_t s_band[PANEL_BANDS] = {
     {"315 RX", "Part 15", 315000000, 2, 2},
     {"345 RX", "Part 15", 345000000, 2, 2},
     {"915 ISM", "902-928", 915000000, 1, 1},
+    {"AM 600", "broadcast", 600000, 3, 2},
+    {"AM 1000", "broadcast", 1000000, 3, 2},
+    {"AM 1600", "broadcast", 1600000, 3, 2},
+    {"SW 3.95", "AM broadcast", 3950000, 3, 3},
+    {"SW 4.90", "AM broadcast", 4900000, 3, 3},
+    {"SW 6.05", "AM broadcast", 6050000, 3, 3},
+    {"SW 7.25", "AM broadcast", 7250000, 3, 3},
+    {"SW 9.65", "AM broadcast", 9650000, 3, 3},
+    {"SW 11.85", "AM broadcast", 11850000, 3, 3},
+    {"SW 13.70", "AM broadcast", 13700000, 3, 3},
+    {"SW 15.35", "AM broadcast", 15350000, 3, 3},
+    {"SW 17.70", "AM broadcast", 17700000, 3, 3},
+    {"SW 21.60", "AM broadcast", 21600000, 3, 3},
+    {"CB 1 AM", "26.965", 26965000, 3, 3},
+    {"CB 9 AM", "27.065", 27065000, 3, 3},
+    {"CB 19 AM", "27.185", 27185000, 3, 3},
+    {"CB 38 LSB", "27.385", 27385000, 5, 3},
+    {"CB 38 USB", "27.385", 27385000, 4, 3},
+    {"CB 40 AM", "27.405", 27405000, 3, 3},
 };
 
 uint32_t panel_zoom_hz(int i) { return s_zoom_hz[i >= 0 && i < PANEL_ZOOMS ? i : 0]; }
@@ -65,6 +84,7 @@ enum {
     K_VOL_DN = K_LOOK + LOOKS, K_VOL_UP, K_SQL_DN, K_SQL_UP,
     K_MEMORY, K_SAVE, K_MSCAN, K_SLOT,      /* K_SLOT + 0..7: memory slots */
     K_DIRECT = K_SLOT + PANEL_MEMS, K_BIAS_OFF = K_DIRECT + 3, K_BIAS_ON,
+    K_PAGE_PREV, K_PAGE_NEXT,
 };
 
 typedef struct {
@@ -76,7 +96,7 @@ typedef struct {
 #define MAXK 16
 #define GAP 6
 static pkey_t s_k[MAXK];
-static int s_nk, s_page, s_hot = -1;          /* s_hot: index of the key under the finger */
+static int s_nk, s_page, s_band_page, s_hot = -1; /* selected BAND page survives redraw */
 static int64_t s_next_rep;
 static uint16_t *s_px;
 static int s_h;                               /* panel height */
@@ -150,9 +170,17 @@ static void build(const ctl_t *c)
     }
     /* sub page: BACK + title, then the body */
     const int bar = 44, by = GAP + bar + GAP, bh = s_h - by - GAP, bw = LCD_W - 2 * GAP;
+    char band_title[24];
+    if (s_page == P_BAND) {
+        int page_size = p ? 10 : 12;
+        int pages = (PANEL_BANDS + page_size - 1) / page_size;
+        if (s_band_page >= pages) s_band_page = pages - 1;
+        snprintf(band_title, sizeof band_title, "BAND %d/%d", s_band_page + 1, pages);
+    }
     add(GAP, GAP, 120, bar, K_BACK, "< BACK", NULL)->big = true;
     const int scan_w = s_page == P_MEM ? 120 + GAP : 0;  /* MEMORY has SCAN up here */
-    add(GAP + 120 + GAP, GAP, LCD_W - 3 * GAP - 120 - scan_w, bar, K_LABEL, s_title[s_page], NULL)->big = true;
+    add(GAP + 120 + GAP, GAP, LCD_W - 3 * GAP - 120 - scan_w, bar, K_LABEL,
+        s_page == P_BAND ? band_title : s_title[s_page], NULL)->big = true;
     if (scan_w) add(LCD_W - GAP - 120, GAP, 120, bar, K_MSCAN, "SCAN", NULL)->big = true;
     switch (s_page) {
     case P_GAIN: {
@@ -210,12 +238,21 @@ static void build(const ctl_t *c)
         stepper(by + hm + GAP + hs + GAP, hs, K_SQL_DN, K_SQL_UP, v, c->sql ? "squelch" : "squelch off");
         break;
     }
-    case P_BAND:
-        /* The old eight keep their indexes; extra presets require another row. */
-        for (int i = 0; i < PANEL_BANDS; i++)
-            grid(GAP, by, bw, bh, c4, (PANEL_BANDS + c4 - 1) / c4,
-                 i, K_BAND + i, s_band[i].name, s_band[i].sub)->sel = i == c->band;
+    case P_BAND: {
+        /* Keep indexes stable across pagination: NVS and memory entries use the old slots. */
+        int rows = p ? 5 : 3, page_size = c4 * rows;
+        int first = s_band_page * page_size, last = first + page_size;
+        if (last > PANEL_BANDS) last = PANEL_BANDS;
+        int grid_h = bh - 54;
+        for (int i = first; i < last; i++)
+            grid(GAP, by, bw, grid_h, c4, rows,
+                 i - first, K_BAND + i, s_band[i].name, s_band[i].sub)->sel = i == c->band;
+        int half = (bw - GAP) / 2, nav_y = by + grid_h + GAP;
+        add(GAP, nav_y, half, 48, K_PAGE_PREV, "< PREV", NULL)->disabled = s_band_page == 0;
+        add(GAP + half + GAP, nav_y, bw - half - GAP, 48,
+            K_PAGE_NEXT, "NEXT >", NULL)->disabled = last == PANEL_BANDS;
         break;
+    }
     case P_SCAN:                             /* Wi-Fi and BLE run on the module's ESP32-C6 */
         grid(GAP, by, bw, bh, 2, 2, 0, K_WIFI, "WIFI", p ? "networks" : "access points, channels")->big = true;
         grid(GAP, by, bw, bh, 2, 2, 1, K_BLE, "BLE", "nearby devices")->big = true;
@@ -325,6 +362,7 @@ static void show_keys(int a, int b)
 void panel_open(const ctl_t *c)
 {
     s_page = P_MENU;
+    s_band_page = 0;
     s_hot = -1;
     show_all(c);
 }
@@ -370,6 +408,13 @@ static int act(ctl_t *c, int id, bool *page_change)
     if (id == K_WIFI) return CTL_WIFI;
     if (id == K_BLE) return CTL_BLE;
     if (id == K_TURN) return CTL_TURN;
+    if (id == K_PAGE_PREV || id == K_PAGE_NEXT) {
+        int page_size = LCD_PORTRAIT ? 10 : 12;
+        int last = (PANEL_BANDS - 1) / page_size;
+        s_band_page = clampi(s_band_page + (id == K_PAGE_NEXT ? 1 : -1), 0, last);
+        *page_change = true;
+        return 0;
+    }
     if (id >= K_TILE && id < K_TILE + 11) { s_page = id - K_TILE; *page_change = true; return 0; }
     if (id == K_MEMORY || id == K_SAVE) { s_page = id == K_SAVE ? P_SAVE : P_MEM; *page_change = true; return 0; }
     if (id == K_MSCAN) {
