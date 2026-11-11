@@ -9,6 +9,7 @@
 #include "rpi_canvas.h"
 #include "pins.h"
 #include "view.h"
+#include "panel.h"
 
 #ifdef ESP_PLATFORM
 #include "esp_heap_caps.h"
@@ -81,17 +82,17 @@ static const theme_t s_themes[] = {
         /* green CRT: oscilloscope graticule, glowing trace, phosphor waterfall */
         .name = "Phosphor", .hdr = HDR_PHOSPHOR, .spec = SPEC_GLOW, .grid = GRID_SCOPE, .axis = AXIS_PLAIN,
         .hdr_h = 40, .spec_h = 128, .axis_h = 16, .btn_y = 5, .btn_h = 30, .peak = true,
-        .bg = C(0, 12, 5), .bg_pb = C(0, 24, 10),
-        .hdr_top = C(0, 10, 4), .hdr_bot = C(0, 4, 2), .hdr_line = C(0, 110, 40),
-        .btn = C(0, 10, 4), .btn_hi = C(0, 10, 4), .btn_on = C(60, 255, 120), .btn_edge = C(0, 150, 60),
-        .txt = C(110, 255, 150), .dim = C(0, 140, 60), .freq = C(80, 255, 130),
-        .grid_c = C(0, 60, 24), .fill_t = 0, .fill_b = 0,
-        .trace = C(200, 255, 210), .trace2 = C(40, 220, 100), .peak_c = C(0, 90, 36),
-        .center = C(255, 90, 60), .label = C(0, 130, 55), .plate = C(0, 20, 8),
-        .axis_bg = C(0, 8, 3), .axis_bg2 = C(0, 8, 3), .axis_fg = C(80, 230, 120), .axis_tick = C(0, 130, 55),
+        .bg = C(0, 12, 0), .bg_pb = C(0, 24, 0),
+        .hdr_top = C(0, 10, 0), .hdr_bot = C(0, 4, 0), .hdr_line = C(0, 110, 0),
+        .btn = C(0, 10, 0), .btn_hi = C(0, 10, 0), .btn_on = C(0, 255, 0), .btn_edge = C(0, 150, 0),
+        .txt = C(0, 255, 0), .dim = C(0, 140, 0), .freq = C(0, 255, 0),
+        .grid_c = C(0, 60, 0), .fill_t = 0, .fill_b = 0,
+        .trace = C(0, 255, 0), .trace2 = C(0, 220, 0), .peak_c = C(0, 90, 0),
+        .center = C(0, 240, 0), .label = C(0, 130, 0), .plate = C(0, 20, 0),
+        .axis_bg = C(0, 8, 0), .axis_bg2 = C(0, 8, 0), .axis_fg = C(0, 230, 0), .axis_tick = C(0, 130, 0),
         .wf_db = 44,
-        .wf = {{0, 0, 0, 0}, {.25f, 0, 30, 10}, {.45f, 0, 80, 30}, {.62f, 0, 150, 55},
-               {.76f, 40, 220, 90}, {.88f, 140, 255, 160}, {.96f, 220, 255, 225}, {1, 255, 255, 255}},
+        .wf = {{0, 0, 0, 0}, {.25f, 0, 30, 0}, {.45f, 0, 80, 0}, {.62f, 0, 150, 0},
+               {.76f, 0, 220, 0}, {.88f, 0, 255, 0}, {.96f, 0, 255, 0}, {1, 0, 255, 0}},
     },
     {
         /* valve radio: walnut, amber readout in a glass window, cream tuning dial */
@@ -136,6 +137,7 @@ static const theme_t s_themes[] = {
 #define MAX_WF_H   LCD_LONG
 #define AUDIO_CTRL_W 208
 #define AUDIO_CTRL_H 72
+#define FOOTER_H 80
 
 static const theme_t *T = &s_themes[0];
 static int s_spec_y, s_axis_y, s_wf_y, s_wf_h;
@@ -154,6 +156,8 @@ static bool s_auto = true;                             /* dB range follows the n
 static float s_ref = -20, s_range = 60;                /* manual: top of the scale, height in dB */
 static uint16_t *s_hdr, *s_axis, *s_spec;
 static uint16_t *s_audio_ctrl;
+static bool s_footer_valid;
+static int s_footer_vol, s_footer_sql, s_footer_bw, s_footer_pressed;
 static uint16_t *s_wf;                       /* 2*wf_h rows, each line stored twice */
 static int s_wf_head;
 static float s_col[LCD_LONG], s_smooth[LCD_LONG], s_peak[LCD_LONG];
@@ -190,7 +194,7 @@ void view_init(uint32_t sample_rate)
     s_hdr = BIG_ALLOC(LCD_LONG * MAX_HDR_H * 2);
     s_axis = BIG_ALLOC(LCD_LONG * MAX_AXIS_H * 2);
     s_spec = BIG_ALLOC(LCD_LONG * MAX_SPEC_H * 2);
-    s_audio_ctrl = BIG_ALLOC(AUDIO_CTRL_W * AUDIO_CTRL_H * 2);
+    s_audio_ctrl = BIG_ALLOC(LCD_LONG * FOOTER_H * 2);
     s_wf = BIG_ALLOC(2 * MAX_WF_H * LCD_LONG * 2);
     if (!s_hdr || !s_axis || !s_spec || !s_wf || !s_audio_ctrl) abort();
     build_segments();
@@ -258,8 +262,29 @@ static int audio_y(void) { return LCD_H - 8 - AUDIO_CTRL_H; }
 
 bool view_audio_overlay_at(int x, int y)
 {
-    return x >= audio_x() && x < audio_x() + AUDIO_CTRL_W &&
-           y >= audio_y() && y < audio_y() + AUDIO_CTRL_H;
+    return x >= 0 && x < LCD_W && y >= LCD_H - FOOTER_H && y < LCD_H;
+}
+
+static int mode_cols(void) { return LCD_W >= 700 ? 6 : LCD_W >= 480 ? 3 : 0; }
+static button_t mode_button(int i)
+{
+    int cols = mode_cols();
+    if (!cols) return (button_t){0};
+    int mw = LCD_W - AUDIO_CTRL_W - 18;
+    int kw = (mw - (cols - 1) * 4) / cols;
+    int x = 6 + i % cols * (kw + 4);
+    int y = cols == 6 ? 14 : 6 + i / cols * 36;
+    return (button_t){x, y, kw, cols == 6 ? 52 : 32, NULL};
+}
+
+int view_mode_button_at(int x, int y)
+{
+    y -= LCD_H - FOOTER_H;
+    for (int i = 0; i < PANEL_BWS && mode_cols(); i++) {
+        button_t b = mode_button(i);
+        if (x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h) return VIEW_MODE_0 + i;
+    }
+    return -1;
 }
 
 int view_audio_button_at(int x, int y)
@@ -274,20 +299,33 @@ int view_audio_button_at(int x, int y)
     return row ? (col ? VIEW_SQL_UP : VIEW_SQL_DN) : (col ? VIEW_VOL_UP : VIEW_VOL_DN);
 }
 
-void view_audio_controls(int vol, int sql, int pressed)
+void view_audio_controls(int vol, int sql, int bw, int pressed)
 {
-    rpi_canvas_t c = {s_audio_ctrl, AUDIO_CTRL_W, AUDIO_CTRL_H};
-    rpi_cv_rrect(&c, 0, 0, AUDIO_CTRL_W, AUDIO_CTRL_H, 5, T->plate);
+    if (s_footer_valid && s_footer_vol == vol && s_footer_sql == sql &&
+        s_footer_bw == bw && s_footer_pressed == pressed) return;
+    rpi_canvas_t c = {s_audio_ctrl, LCD_W, FOOTER_H};
+    rpi_cv_fill(&c, 0, 0, LCD_W, FOOTER_H, T->plate);
+    rpi_cv_fill(&c, 0, 0, LCD_W, 1, T->hdr_line);
+    static const char *modes[PANEL_BWS] = {"WFM", "NFM25", "NFM12", "AM", "USB", "LSB"};
+    for (int i = 0; i < PANEL_BWS && mode_cols(); i++) {
+        button_t b = mode_button(i);
+        bool on = bw == i || pressed == VIEW_MODE_0 + i;
+        uint16_t fill = on ? T->btn_on : T->btn;
+        rpi_cv_rrect(&c, b.x, b.y, b.w, b.h, T->hdr == HDR_PORTAPACK ? 0 : 4, fill);
+        rpi_cv_text(&c, b.x + (b.w - rpi_cv_text_w(modes[i], 1)) / 2,
+                    b.y + (b.h - 16) / 2, modes[i], on ? btn_text(true) : T->txt, 1);
+    }
+    int ox = audio_x();
     for (int row = 0; row < 2; row++) {
         int y = 4 + row * 33;
         char text[20];
         if (!row) snprintf(text, sizeof text, "VOL %d", vol);
         else if (sql) snprintf(text, sizeof text, "SQL %d", sql);
         else snprintf(text, sizeof text, "SQL OPEN");
-        rpi_cv_text(&c, 8, y + 8, text, T->txt, 1);
+        rpi_cv_text(&c, ox + 8, y + 8, text, T->txt, 1);
         for (int col = 0; col < 2; col++) {
             int id = (row ? VIEW_SQL_DN : VIEW_VOL_DN) + col;
-            int bx = 126 + col * 40;
+            int bx = ox + 126 + col * 40;
             bool on = pressed == id;
             rpi_cv_rrect(&c, bx, y, 36, 31, T->hdr == HDR_PORTAPACK ? 0 : 4, on ? T->btn_on : T->btn);
             const char *sign = col ? "+" : "-";
@@ -295,8 +333,12 @@ void view_audio_controls(int vol, int sql, int pressed)
                         sign, on ? btn_text(true) : T->txt, 1);
         }
     }
-    rpi_lcd_blit(audio_x(), audio_y(), AUDIO_CTRL_W, AUDIO_CTRL_H, s_audio_ctrl);
+    rpi_lcd_blit(0, LCD_H - FOOTER_H, LCD_W, FOOTER_H, s_audio_ctrl);
+    s_footer_vol = vol; s_footer_sql = sql; s_footer_bw = bw; s_footer_pressed = pressed;
+    s_footer_valid = true;
 }
+
+void view_footer_invalidate(void) { s_footer_valid = false; }
 
 void view_set_range(bool auto_range, float ref_db, float range_db)
 {
@@ -318,14 +360,40 @@ static void scale(float *lo, float *hi, float *wlo, float *whi)
 }
 float view_floor(void) { return s_floor; }
 
-/* Landscape: one header row, [-1M][-100k] readout [+100k][+1M][MENU].
- * Portrait: readout and MENU on top, the four step keys in a row under them. */
+/* Waveshare: six tuning keys (1M, middle, fine) around the frequency in landscape,
+ * or a six-key row below it in portrait. Keep the old four-key layout on smaller kits. */
 static void layout(void)
 {
-    static const char *lbl[VIEW_NBTN] = {"-1M", "-100k", "+100k", "+1M", NULL, NULL};
+    static const char *lbl[VIEW_NBTN] = {"-1M", "-100k", "+100k", "+1M",
+                                         "-10k", "+10k", NULL, NULL};
     const int y = T->btn_y, h = T->btn_h;
+    memset(s_btn, 0, sizeof s_btn);
+#ifdef CONFIG_SDR_WAVESHARE_43
     if (!LCD_PORTRAIT) {
-        static const int bx[VIEW_NBTN][2] = {{4, 44}, {52, 54}, {318, 54}, {376, 44}, {424, 52}, {110, 204}};
+        static const struct { int id, x, w; } steps[] = {
+            {VIEW_DN1M, 4, 66}, {VIEW_DN100K, 76, 66}, {VIEW_DN100, 148, 66},
+            {VIEW_UP100, 524, 58}, {VIEW_UP100K, 588, 58}, {VIEW_UP1M, 652, 58},
+        };
+        for (int i = 0; i < 6; i++)
+            s_btn[steps[i].id] = (button_t){steps[i].x, y, steps[i].w, h, lbl[steps[i].id]};
+        s_btn[VIEW_GAIN] = (button_t){738, y, 56, h, NULL};
+        s_btn[VIEW_THEME] = (button_t){220, y, 298, h, NULL};
+        s_hdr_h = T->hdr_h;
+        s_spec_h = T->spec_h;
+        s_ro_x0 = 220; s_ro_x1 = 518;
+        return;
+    }
+    static const int order[] = {VIEW_DN1M, VIEW_DN100K, VIEW_DN100,
+                                VIEW_UP100, VIEW_UP100K, VIEW_UP1M};
+    int kw6 = (LCD_W - 7 * 4) / 6;
+    for (int i = 0; i < 6; i++)
+        s_btn[order[i]] = (button_t){4 + i * (kw6 + 4), T->hdr_h + 3,
+                                     kw6, PORT_KEYS - 6, lbl[order[i]]};
+#else
+    if (!LCD_PORTRAIT) {
+        static const int bx[VIEW_NBTN][2] = {
+            {4, 44}, {52, 54}, {318, 54}, {376, 44}, {0, 0}, {0, 0}, {424, 52}, {110, 204}
+        };
         for (int i = 0; i < VIEW_NBTN; i++) {
             int x = bx[i][0] * LCD_W / 480;
             int end = (bx[i][0] + bx[i][1]) * LCD_W / 480;
@@ -339,6 +407,7 @@ static void layout(void)
     }
     const int kw = (LCD_W - 5 * 4) / 4;
     for (int i = 0; i < 4; i++) s_btn[i] = (button_t){4 + i * (kw + 4), T->hdr_h + 3, kw, PORT_KEYS - 6, lbl[i]};
+#endif
     s_btn[VIEW_GAIN] = (button_t){LCD_W - 56, y, 52, h, NULL};
     s_btn[VIEW_THEME] = (button_t){4, y, LCD_W - 64, h, NULL};
     s_hdr_h = T->hdr_h + PORT_KEYS;
@@ -355,11 +424,12 @@ void view_set_theme(int i)
     s_spec_y = s_hdr_h;
     s_axis_y = s_spec_y + s_spec_h;
     s_wf_y = s_axis_y + T->axis_h;
-    s_wf_h = LCD_H - s_wf_y;
+    s_wf_h = LCD_H - FOOTER_H - s_wf_y;
     s_wf_head = 0;
     memset(s_wf, 0, 2 * MAX_WF_H * LCD_LONG * 2);
     build_tables();
     rpi_lcd_fill_rect(0, 0, LCD_W, LCD_H, T->bg);
+    view_footer_invalidate();
 }
 
 void view_reset(void)
@@ -527,6 +597,7 @@ void view_header(uint32_t freq, const char *gain, int pressed)
 
     for (int i = 0; i < VIEW_THEME; i++) {
         const button_t *b = &s_btn[i];
+        if (!b->w) continue;
         bool on = i == pressed;
         button(&c, b, on);
         if (i == VIEW_GAIN) {                    /* opens Controls; shows the gain underneath */
@@ -535,8 +606,12 @@ void view_header(uint32_t freq, const char *gain, int pressed)
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(gain, 1)) / 2, ty + 15, gain,
                         on || T->hdr == HDR_VINTAGE ? btn_text(on) : T->dim, 1);
         } else {
-            static const char *fine[] = {"-1k", "-100", "+100", "+1k"};
-            const char *label = s_fine_tune && i < 4 ? fine[i] : b->label;
+#ifdef CONFIG_SDR_WAVESHARE_43
+            static const char *fine[] = {"-1M", "-1k", "+1k", "+1M", "-100", "+100"};
+#else
+            static const char *fine[] = {"-1k", "-100", "+100", "+1k", NULL, NULL};
+#endif
+            const char *label = s_fine_tune && i < VIEW_GAIN ? fine[i] : b->label;
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(label, 1)) / 2, b->y + (b->h - 16) / 2,
                         label, btn_text(on), 1);
         }
@@ -578,6 +653,7 @@ int view_button_at(int x, int y)
     if (y >= s_hdr_h) return -1;
     for (int i = 0; i < VIEW_NBTN; i++) {
         const button_t *b = &s_btn[i];
+        if (!b->w) continue;
         if (x >= b->x - 2 && x < b->x + b->w + 2 && y >= b->y - 4 && y < b->y + b->h + 4) return i;
     }
     return -1;
@@ -915,7 +991,9 @@ void view_splash_line(int y, const char *s, int tone)
     rpi_canvas_t c = {px, LCD_W, 16};
     for (int r = 0; r < 16; r++) rpi_cv_fill(&c, 0, r, LCD_W, 1, spl_bg(y + r));
     int x = (LCD_W - rpi_cv_text_w(s, 1)) / 2;
-    rpi_cv_text(&c, x < 0 ? 0 : x, 0, s, tone == SPLASH_DIM ? T->dim : tone >= SPLASH_OK ? tones[tone - SPLASH_OK] : spl_fg(), 1);
+    uint16_t fg = tone == SPLASH_DIM ? T->dim : tone >= SPLASH_OK ?
+                  (T->hdr == HDR_PHOSPHOR ? T->txt : tones[tone - SPLASH_OK]) : spl_fg();
+    rpi_cv_text(&c, x < 0 ? 0 : x, 0, s, fg, 1);
     rpi_lcd_blit(0, y, LCD_W, 16, px);
 }
 
@@ -980,6 +1058,8 @@ void view_message(const char *a, const char *b)
 {
     uint16_t bg = T->bg, fg = T->hdr == HDR_VINTAGE ? T->trace : T->txt;
     rpi_lcd_fill_rect(0, s_spec_y, LCD_W, LCD_H - s_spec_y, bg);
-    rpi_lcd_text(LCD_W / 2 - (int)strlen(a) * 4, 180, a, RGB565(255, 96, 72), bg, 1);
+    rpi_lcd_text(LCD_W / 2 - (int)strlen(a) * 4, 180, a,
+                 T->hdr == HDR_PHOSPHOR ? T->txt : RGB565(255, 96, 72), bg, 1);
     if (b) rpi_lcd_text(LCD_W / 2 - (int)strlen(b) * 4, 200, b, fg, bg, 1);
+    view_footer_invalidate(); /* stream-loss message paints over the cached footer */
 }

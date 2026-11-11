@@ -25,6 +25,7 @@
 
 static uint16_t fb[LCD_LONG * LCD_SHORT];   /* LCD_W x LCD_H, either way round */
 #define FB(x, y) fb[(y) * LCD_W + (x)]
+static int s_blit_count, s_last_y, s_last_h;
 
 int rpi_lcd_w = LCD_LONG, rpi_lcd_h = LCD_SHORT;
 #ifdef CONFIG_SDR_WAVESHARE_43
@@ -49,6 +50,8 @@ esp_err_t rpi_lcd_fill_rect(int x, int y, int w, int h, uint16_t c)
 esp_err_t rpi_lcd_blit(int x, int y, int w, int h, const uint16_t *p)
 {
     if (x < 0 || y < 0 || x + w > LCD_W || y + h > LCD_H) return ESP_ERR_INVALID_ARG;
+    s_blit_count++;
+    s_last_y = y; s_last_h = h;
     for (int j = 0; j < h; j++)
         for (int i = 0; i < w; i++) FB(x + i, y + j) = p[j * w + i];
     return ESP_OK;
@@ -184,7 +187,7 @@ static void render_all(const char *dir, const char *tag, uint32_t freq, int pres
             view_render(db, NFFT, freq);
         }
         view_blit();
-        view_audio_controls(5, 2, -1);
+        view_audio_controls(5, 2, 4, -1);
         char path[512];
         snprintf(path, sizeof path, "%s/%s%s.png", dir, tag, view_theme_name(t));
         write_png(path, fb, LCD_W, LCD_H);
@@ -380,6 +383,16 @@ static void test_audio_controls(void)
         rpi_lcd_set_portrait(orientation != 0);
         for (int theme = 0; theme < view_themes(); theme++) {
             view_set_theme(theme);
+            view_blit_waterfall();
+            assert(s_last_y + s_last_h == LCD_H - 80); /* static footer is never wiped by waterfall */
+            view_audio_controls(5, 2, 4, -1);
+            int drawn = s_blit_count;
+            view_audio_controls(5, 2, 4, -1);
+            assert(s_blit_count == drawn); /* untouched footer is not blitted every frame */
+            view_blit_waterfall();
+            drawn = s_blit_count;
+            view_audio_controls(5, 2, 4, -1);
+            assert(s_blit_count == drawn); /* waterfall refresh cannot invalidate footer */
             size_t header_bytes = (size_t)LCD_W * view_tune_y() * sizeof(uint16_t);
             uint16_t *old_header = malloc(header_bytes);
             assert(old_header);
@@ -394,6 +407,17 @@ static void test_audio_controls(void)
             view_header(142000100, "AGC", -1);
             assert(!memcmp(old_header, fb, header_bytes)); /* FM stays at whole kHz */
             free(old_header);
+#ifdef CONFIG_SDR_WAVESHARE_43
+            static const int tune_keys[] = {VIEW_DN1M, VIEW_DN100K, VIEW_DN100,
+                                            VIEW_UP100, VIEW_UP100K, VIEW_UP1M};
+            for (int i = 0; i < 6; i++) {
+                int kw = (LCD_W - 7 * 4) / 6;
+                int bx = LCD_PORTRAIT ? 4 + i * (kw + 4) + kw / 2 :
+                         (int[]){37, 109, 181, 553, 617, 681}[i];
+                int by = LCD_PORTRAIT ? view_tune_y() - 20 : 20;
+                assert(view_button_at(bx, by) == tune_keys[i]);
+            }
+#endif
             int x = LCD_W - 8 - 208, y = LCD_H - 8 - 72;
             assert(y > view_tune_y());
             assert(view_audio_button_at(x + 144, y + 19) == VIEW_VOL_DN);
@@ -406,9 +430,20 @@ static void test_audio_controls(void)
             assert(view_audio_button_at(x + 184, LCD_H - 1) == -1);
             assert(view_audio_overlay_at(x + 20, y + 19));
             assert(view_audio_overlay_at(x + 208 - 1, y + 71));
-            assert(!view_audio_overlay_at(x - 1, y + 19));
+            assert(view_audio_overlay_at(x - 1, y + 19)); /* mode region also blocks tuning */
             assert(!view_audio_overlay_at(x + 20, y - 1));
-            view_audio_controls(5, 2, -1);
+            int cols = LCD_W >= 700 ? 6 : LCD_W >= 480 ? 3 : 0;
+            if (cols) {
+                int mw = LCD_W - 208 - 18;
+                int kw = (mw - (cols - 1) * 4) / cols;
+                for (int i = 0; i < 6; i++) {
+                    int bx = 6 + i % cols * (kw + 4) + kw / 2;
+                    int by = LCD_H - 80 + (cols == 6 ? 14 + 26 : 6 + i / cols * 36 + 16);
+                    assert(view_mode_button_at(bx, by) == VIEW_MODE_0 + i);
+                    assert(view_audio_button_at(bx, by) == -1);
+                }
+            }
+            view_audio_controls(5, 2, 4, -1);
         }
         ctl_t ct = {.gain_idx = 0, .gain_n = 30, .gain_label = gain_label,
                     .gain_tenths = gain_tenths, .range_auto = true, .vol = 5};
@@ -453,13 +488,69 @@ static void test_audio_controls(void)
     puts("audio controls: hit regions and USB/LSB menu selection, all themes and orientations OK");
 }
 
+static void test_phosphor_green(void)
+{
+    static float db[1024];
+    view_init(RATE);
+    panel_init();
+    for (int orientation = 0; orientation < 2; orientation++) {
+        rpi_lcd_set_portrait(orientation != 0);
+        view_set_theme(2); /* Phosphor */
+        view_header(142000100, "AGC", -1);
+        view_axis(142000100);
+        for (int i = 0; i < 1024; i++) db[i] = -65 + 3 * sin(i / 10.0);
+        view_set_audio("USB 5", true);
+        view_render(db, 1024, 142000100);
+        view_blit();
+        view_audio_controls(5, 2, 4, -1);
+        for (int i = 0; i < LCD_W * LCD_H; i++)
+            assert(!(fb[i] & (0xf800 | 0x001f))); /* zero red and blue in RGB565 */
+        ctl_t ct = {.gain_idx = 0, .gain_n = 30, .gain_label = gain_label,
+                    .gain_tenths = gain_tenths, .range_auto = true, .vol = 5};
+        panel_open(&ct);
+        for (int i = 0; i < LCD_W * LCD_H; i++)
+            assert(!(fb[i] & (0xf800 | 0x001f)));
+        view_splash(0, 1, "RTL-SDR receiver");
+        view_splash_line(view_splash_text_y(), "USB link OK", SPLASH_OK);
+        view_splash_line(view_splash_text_y() + 20, "USB link failed", SPLASH_BAD);
+        for (int i = 0; i < LCD_W * LCD_H; i++)
+            assert(!(fb[i] & (0xf800 | 0x001f)));
+        view_message("RTL-SDR not streaming", "Check USB link");
+        for (int i = 0; i < LCD_W * LCD_H; i++)
+            assert(!(fb[i] & (0xf800 | 0x001f)));
+    }
+    puts("Phosphor: RGB565 red/blue channels zero across receiver and menu");
+}
+
+static void test_footer_stream_recovery(void)
+{
+    view_init(RATE);
+    view_set_theme(0);
+    view_audio_controls(5, 2, 4, -1);
+    int x = LCD_W / 2, y = LCD_H - 40;
+    uint16_t expected = FB(x, y);
+    view_message("RTL-SDR not streaming", "USB link lost");
+    assert(FB(x, y) != expected); /* stream-loss message paints over footer */
+    view_header(142000100, "AGC", -1);
+    view_axis(142000100);
+    view_blit();
+    int drawn = s_blit_count;
+    view_audio_controls(5, 2, 4, -1);
+    assert(s_blit_count > drawn); /* footer must be restored without a value change */
+    assert(FB(x, y) == expected);
+    puts("stream recovery restores footer after the message clears it");
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "--test-audio")) { test_audio_controls(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "--test-phosphor")) { test_phosphor_green(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "--test-footer-recovery")) { test_footer_stream_recovery(); return 0; }
     if (argc > 2 && !strcmp(argv[1], "--audio-snapshot")) {
         static float db[1024];
         view_init(RATE);
-        view_set_theme(0);
+        if (argc > 3 && !strcmp(argv[3], "--portrait")) rpi_lcd_set_portrait(true);
+        view_set_theme(argc > 4 && !strcmp(argv[4], "--phosphor") ? 2 : 0);
         view_set_passband(3000);
         view_set_sideband(1);
         view_set_fine_tune(true);
@@ -473,7 +564,7 @@ int main(int argc, char **argv)
             view_render(db, 1024, 142000100);
         }
         view_blit();
-        view_audio_controls(5, 2, -1);
+        view_audio_controls(5, 2, 4, -1);
         write_png(argv[2], fb, LCD_W, LCD_H);
         printf("%s\n", argv[2]);
         return 0;

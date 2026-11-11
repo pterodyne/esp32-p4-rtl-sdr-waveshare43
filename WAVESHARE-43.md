@@ -11,10 +11,16 @@ portrait and **MENU → LOOK → TURN** cycles through all four 90-degree
 orientations (0°/90°/180°/270° clockwise), rotating touch with the picture.
 The selection is saved; older `port` portrait/landscape settings are migrated
 on load. Landscape draws in software, so it may be slower than portrait.
-The user has confirmed all four rotations work on a rev3 board. Compact
-waterfall VOL/SQL touch steppers and USB/LSB sideband reception are newer
-additions, not yet tested on board; use **MENU → AUDIO** for 3 kHz USB/LSB,
-then the header's 1 kHz and 100 Hz step keys for fine tuning.
+The user has confirmed all four rotations work on a rev3 board. The previous
+floating waterfall VOL/SQL controls flickered on board and the interface was
+reported to flash every few seconds. The revised UI stops waterfall blits
+80 pixels above the bottom: fixed WFM/NFM25/NFM12/AM/USB/LSB mode buttons
+sit to the left of VOL/SQL steppers. Footer drawing is cached when unchanged.
+This is host-tested and cross-built but **not yet verified on the board**; if
+flashing continues, inspect UART logs for stream restarts and USB errors.
+The Waveshare header has six tuning keys: ±1 MHz, ±100 kHz, ±10 kHz for
+AM/FM, or ±1 MHz, ±1 kHz, ±100 Hz for SSB. Phosphor uses only green RGB565.
+Use the footer or **MENU → AUDIO** for 3 kHz USB/LSB reception.
 SSB currently has a fixed audio gain rather than speech AGC; set SQL to OPEN
 (0) because its power-based squelch can mute an already-present voice signal.
 
@@ -61,8 +67,9 @@ against `dist/SHA256SUMS-waveshare43` before flashing. A full-image flash can
 overwrite saved settings and channel memories. **A previous rev3 full-flash
 image was user-flashed on this board: its display and RTL-SDR via J3 worked
 with USB-supplied power and no battery, and its four-way rotation update was
-also confirmed working by the user.** The newer audio controls and SSB modes
-have not yet been verified on hardware. Rev1 remains cross-compiled and untested.
+also confirmed working by the user.** Its floating audio controls flickered;
+this newer fixed-footer revision and SSB have not been verified on hardware.
+Rev1 remains cross-compiled and untested.
 Inspect the UART console at 115200 baud when testing new functions. The ESP32-C6
 may need compatible ESP-Hosted coprocessor firmware for Wi-Fi/BLE scanning;
 audio and SD operation have not been verified on this board.

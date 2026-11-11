@@ -256,6 +256,7 @@ static void panel_show(bool on)
         panel_open(&s_ctl);
     } else {
         view_axis(sdr_freq());                 /* spectrum and waterfall come back next frame */
+        view_footer_invalidate();
     }
 }
 
@@ -291,6 +292,21 @@ static void turn(void)
 
 static void do_action(int act)
 {
+    if (act >= VIEW_MODE_0 && act < VIEW_MODE_0 + PANEL_BWS) {
+        int bw = act - VIEW_MODE_0;
+        if (s_ctl.bw != bw) {
+            s_ctl.bw = bw;
+            s_ctl.band = -1;
+            view_set_passband(panel_bw_hz(bw));
+            view_set_sideband(bw == 4 ? 1 : bw == 5 ? -1 : 0);
+            view_set_fine_tune(bw >= 4);
+            apply_audio();
+            draw_header(-1);
+            settings_changed();
+        }
+        view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_audio_pressed);
+        return;
+    }
     if (act >= VIEW_VOL_DN && act <= VIEW_SQL_UP) {
         int prev = act <= VIEW_VOL_UP ? s_ctl.vol : s_ctl.sql;
         if (act == VIEW_VOL_DN && s_ctl.vol > 0) s_ctl.vol--;
@@ -300,17 +316,25 @@ static void do_action(int act)
         if (act <= VIEW_VOL_UP) {
             if (prev != s_ctl.vol) { audio_set_volume(s_ctl.vol); settings_changed(); }
         } else if (prev != s_ctl.sql) { audio_set_squelch(s_ctl.sql); settings_changed(); }
-        view_audio_controls(s_ctl.vol, s_ctl.sql, s_audio_pressed);
+        view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_audio_pressed);
         return;
     }
     uint32_t f = sdr_freq();
+#ifdef CONFIG_SDR_WAVESHARE_43
+    uint32_t coarse = 1000000;
+    uint32_t fine = s_ctl.bw >= 4 ? 1000 : 100000;
+#else
     uint32_t coarse = s_ctl.bw >= 4 ? 1000 : 1000000;
     uint32_t fine = s_ctl.bw >= 4 ? 100 : 100000;
+#endif
+    uint32_t smallest = s_ctl.bw >= 4 ? 100 : 10000;
     switch (act) {
     case VIEW_DN1M:   retune(f > coarse ? f - coarse : 0); break;
     case VIEW_DN100K: retune(f > fine ? f - fine : 0); break;
     case VIEW_UP100K: retune(f + fine); break;
     case VIEW_UP1M:   retune(f + coarse); break;
+    case VIEW_DN100:  retune(f > smallest ? f - smallest : 0); break;
+    case VIEW_UP100:  retune(f + smallest); break;
     case VIEW_GAIN:   panel_show(!s_panel); break;
     case VIEW_THEME:  set_look((view_theme() + 1) % view_themes()); break;
     }
@@ -383,7 +407,7 @@ static void poll_touch(const touch_cal_t *cal)
 {
     static bool down;
     static int n, x, y;
-    static int where;                       /* 0 header, 1 panel, 2 tuning, 3 ADS-B, 4 scanner, 5 none, 6 audio */
+    static int where;                       /* 0 header, 1 panel, 2 tuning, 3 ADS-B, 4 scanner, 5 none, 6 audio, 7 mode */
     static int act = -1;
     static int64_t next_repeat;
     uint16_t rx, ry, rz;
@@ -394,7 +418,12 @@ static void poll_touch(const touch_cal_t *cal)
             if (where == 3) s_av_action = adsb_view_touch(AV_RELEASE, x, y);
             else if (where == 4) s_sv_action = scan_view_touch(SV_RELEASE, x, y);
             else if (where == 0 && act >= 0) draw_header(-1);
-            else if (where == 6) { s_audio_pressed = -1; view_audio_controls(s_ctl.vol, s_ctl.sql, -1); }
+            else if (where == 6) { s_audio_pressed = -1; view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, -1); }
+            else if (where == 7) {
+                s_audio_pressed = -1;
+                if (view_mode_button_at(x, y) == act) do_action(act);
+                else view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, -1);
+            }
             else if (where == 1) panel_event(PANEL_RELEASE, x, y, now);
             else if (where == 2 && !s_panel && !view_audio_overlay_at(x, y)) {
                 int step = s_ctl.bw >= 4 ? (s_ctl.zoom >= 2 ? 100 : 1000) :
@@ -436,6 +465,10 @@ static void poll_touch(const touch_cal_t *cal)
             s_audio_pressed = act;
             do_action(act);
             next_repeat = now + 450000;
+        } else if ((act = view_mode_button_at(x, y)) >= 0) {
+            where = 7;
+            s_audio_pressed = act;
+            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, act);
         } else if (view_audio_overlay_at(x, y)) {
             where = 5;                       /* label/padding: never retune underneath */
         } else {
@@ -448,18 +481,25 @@ static void poll_touch(const touch_cal_t *cal)
     if (where == 3) adsb_view_touch(AV_MOVE, x, y);
     else if (where == 4) scan_view_touch(SV_MOVE, x, y);
     else if (where == 1) panel_event(PANEL_MOVE, x, y, now);
+    else if (where == 7) {
+        int hot = view_mode_button_at(x, y) == act ? act : -1;
+        if (hot != s_audio_pressed) {
+            s_audio_pressed = hot;
+            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, hot);
+        }
+    }
     else if (where == 6) {
         int hot = view_audio_button_at(x, y) == act ? act : -1;
         if (hot != s_audio_pressed) {
             s_audio_pressed = hot;
-            view_audio_controls(s_ctl.vol, s_ctl.sql, hot);
+            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, hot);
         }
         if (hot >= 0 && now >= next_repeat) {
             do_action(act);
             next_repeat = now + 150000;
         }
     }
-    else if (where == 0 && act >= 0 && act <= VIEW_UP1M && now >= next_repeat) {
+    else if (where == 0 && act >= 0 && act < VIEW_GAIN && now >= next_repeat) {
         do_action(act);
         next_repeat = now + 150000;
     }
@@ -803,7 +843,7 @@ void ui_run(const touch_cal_t *cal)
         poll_touch(cal);
         if (!s_panel) {
             view_blit_waterfall();
-            view_audio_controls(s_ctl.vol, s_ctl.sql, s_audio_pressed);
+            view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_audio_pressed);
         }
         int64_t t2 = esp_timer_get_time();
         t_dsp += t1 - t0;

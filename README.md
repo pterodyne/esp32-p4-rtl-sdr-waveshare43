@@ -13,21 +13,28 @@ touch through 0°, 90°, 180° and 270° clockwise from the native portrait
 orientation; the choice is saved for the next boot. Four-way rotation has been
 confirmed working on the user's rev3 board.
 
-The receiver waterfall has compact **VOL −/+** and **SQL −/+** touch controls
-at its lower right; hold a key to repeat. Volume ranges from 0 (off) to 10,
-and squelch from 0 (open) to 9. **MENU → AUDIO** offers the original WFM,
-NFM and AM filters plus 3 kHz **USB** and **LSB** single-sideband modes.
-In SSB the tuning keys change from MHz/100 kHz steps to **1 kHz/100 Hz**
-for fine voice tuning; tune to the suppressed-carrier frequency. These new
-controls and SSB modes have host tests, but have not yet been verified on the
-board with a live signal. **Set SQL to OPEN (0) for SSB**: its nonzero
-power-based squelch may mute speech and does not discriminate sidebands.
+The waterfall stops above a fixed **80-pixel footer**: six mode buttons
+(WFM, NFM25, NFM12, AM, USB, LSB) are on the left and **VOL −/+** and
+**SQL −/+** on the right. Hold an audio key to repeat. Volume ranges from
+0 (off) to 10 and squelch from 0 (open) to 9; **MENU → AUDIO** also offers
+these modes and settings. The three tuning steps per direction are
+**1 MHz / 100 kHz / 10 kHz** in AM/FM and **1 MHz / 1 kHz / 100 Hz** in SSB;
+tune SSB to the suppressed-carrier frequency. Phosphor now uses only the green
+RGB565 channel, including its splash and status messages.
+
+The older floating audio controls were reported to flicker on hardware, and
+the interface was reported to flash every few seconds. The static footer and
+bounded waterfall pass host tests and cross-builds, but **their on-board effect
+is not yet confirmed**; if flashing remains, capture the UART log around the
+event (especially stream restart and USB error messages). **Set SQL to OPEN
+(0) for SSB**: its nonzero power-based squelch may mute speech and does not
+discriminate sidebands.
 
 ## Hardware status
 
 | Image | P4 revision | Status on this board |
 | --- | --- | --- |
-| `p4-sdr-waveshare43-rev3.bin` | v3.1 and newer | **User-flashed: display, RTL-SDR on J3 with USB-supplied power and no battery, and four-way rotation work.** New waterfall controls and SSB are not yet hardware-tested. |
+| `p4-sdr-waveshare43-rev3.bin` | v3.1 and newer | **User-flashed older image:** display, RTL-SDR on J3 with USB-supplied power and no battery, and four-way rotation worked. The old floating controls flickered; the new footer and SSB have not yet been verified on board. |
 | `p4-sdr-waveshare43-rev1.bin` | v1.x | Cross-compiled; not tested on this board. |
 
 **Battery-power limitation (user report):** with the RTL-SDR connected via J3,

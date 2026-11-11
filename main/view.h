@@ -11,8 +11,9 @@
 #include <stdint.h>
 #include "spectrum.h"
 
-enum { VIEW_DN1M, VIEW_DN100K, VIEW_UP100K, VIEW_UP1M, VIEW_GAIN, VIEW_THEME, VIEW_NBTN,
-       VIEW_VOL_DN, VIEW_VOL_UP, VIEW_SQL_DN, VIEW_SQL_UP };
+enum { VIEW_DN1M, VIEW_DN100K, VIEW_UP100K, VIEW_UP1M, VIEW_DN100, VIEW_UP100,
+       VIEW_GAIN, VIEW_THEME, VIEW_NBTN,
+       VIEW_VOL_DN, VIEW_VOL_UP, VIEW_SQL_DN, VIEW_SQL_UP, VIEW_MODE_0 };
 
 void view_init(uint32_t sample_rate);        /* allocates the frame buffers, aborts if out of memory */
 int view_themes(void);
@@ -36,10 +37,12 @@ void view_set_sideband(int side);            /* -1 LSB, 0 symmetric, +1 USB */
 void view_set_fine_tune(bool fine);          /* SSB: header steps 1 kHz / 100 Hz */
 /* plate at the top left of the spectrum: label (NULL = none), live = speaker lit */
 void view_set_audio(const char *label, bool live);
-/* Compact waterfall overlay; redraw after the waterfall blit (and on a key press). */
-void view_audio_controls(int vol, int sql, int pressed);
+/* Persistent footer below the waterfall: mode choices and volume/squelch steppers. */
+void view_audio_controls(int vol, int sql, int bw, int pressed);
+void view_footer_invalidate(void);             /* after a full-screen menu obscures the footer */
 int view_audio_button_at(int x, int y);       /* only the four +/- keys; -1 elsewhere */
-bool view_audio_overlay_at(int x, int y);     /* opaque labels must not retune the receiver */
+int view_mode_button_at(int x, int y);        /* VIEW_MODE_0 + filter index, or -1 */
+bool view_audio_overlay_at(int x, int y);     /* whole footer consumes touches */
 /* auto: scale follows the noise floor. Otherwise ref = top of the scale, range = height, dBFS. */
 void view_set_range(bool auto_range, float ref_db, float range_db);
 void view_blit(void);                        /* push spectrum + waterfall to the panel */
