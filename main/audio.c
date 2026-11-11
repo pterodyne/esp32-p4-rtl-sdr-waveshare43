@@ -17,6 +17,7 @@
 #include "es8311_codec.h"
 #include "sdr.h"
 #include "audio.h"
+#include "audio_output_policy.h"
 
 static const char *TAG = "audio";
 
@@ -40,7 +41,8 @@ static const char *TAG = "audio";
 
 static esp_codec_dev_handle_t s_dev;
 static volatile bool s_paused = true, s_open;
-static volatile int s_req_vol = -1, s_req_sql = -1;
+static audio_output_requests_t s_output = AUDIO_OUTPUT_REQUESTS_INIT;
+static volatile int s_req_sql = -1;
 static volatile bool s_req_mode, s_req_retune;
 static volatile demod_mode_t s_mode = DEMOD_WFM;
 static volatile uint32_t s_bw = 200000;
@@ -48,7 +50,7 @@ static volatile int s_load, s_lag;
 
 static void set_volume(int v)
 {
-    esp_codec_dev_set_out_mute(s_dev, v == 0);
+    esp_codec_dev_set_out_mute(s_dev, audio_output_should_mute(v, audio_output_is_muted(&s_output)));
     if (v) esp_codec_dev_set_out_vol(s_dev, 40 + 6 * v);   /* 1: -27 dB .. 10: 0 dB */
 }
 
@@ -62,7 +64,8 @@ static void audio_task(void *arg)
     int lag_max = 0;
     bool was_paused = true;
     for (;;) {
-        if (s_req_vol >= 0) { set_volume(s_req_vol); s_req_vol = -1; }
+        int requested_volume = audio_output_take_volume(&s_output);
+        if (requested_volume >= 0) set_volume(requested_volume);
         if (s_req_sql >= 0) { demod_set_squelch(s_req_sql); s_req_sql = -1; }
         if (s_req_mode) { s_req_mode = false; demod_set(s_mode, s_bw); }
         if (s_req_retune) { s_req_retune = false; demod_retuned(); }
@@ -166,7 +169,8 @@ void audio_set_mode(demod_mode_t mode, uint32_t bw_hz)
     s_req_mode = true;
 }
 
-void audio_set_volume(int v) { s_req_vol = v < 0 ? 0 : v > 10 ? 10 : v; }
+void audio_set_volume(int v) { audio_output_set_volume(&s_output, v); }
+void audio_set_mute(bool on) { audio_output_set_mute(&s_output, on); }
 void audio_set_squelch(int level) { s_req_sql = level < 0 ? 0 : level > 9 ? 9 : level; }
 void audio_pause(bool on) { s_paused = on; }
 void audio_retuned(void) { s_req_retune = true; }

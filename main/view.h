@@ -14,7 +14,7 @@
 enum { VIEW_DN1M, VIEW_DN100K, VIEW_UP100K, VIEW_UP1M, VIEW_DN100, VIEW_UP100,
        VIEW_GAIN, VIEW_THEME, VIEW_NBTN,
        VIEW_VOL_DN, VIEW_VOL_UP, VIEW_SQL_DN, VIEW_SQL_UP, VIEW_MODE_0,
-       VIEW_ZOOM_DN = VIEW_MODE_0 + 6, VIEW_ZOOM_UP };
+       VIEW_ZOOM_DN = VIEW_MODE_0 + 6, VIEW_ZOOM_UP, VIEW_MUTE };
 
 void view_init(uint32_t sample_rate);        /* allocates the frame buffers, aborts if out of memory */
 int view_themes(void);
@@ -40,8 +40,9 @@ void view_set_fine_tune(bool fine);          /* SSB: header steps 1 kHz / 100 Hz
 void view_set_audio(const char *label, bool live);
 /* Persistent footer below the waterfall: mode choices and volume/squelch steppers. */
 void view_audio_controls(int vol, int sql, int bw, int zoom, int pressed);
+void view_set_mute(bool muted);              /* preserved volume, fixed-footer mute indication */
 void view_footer_invalidate(void);             /* after a full-screen menu obscures the footer */
-int view_audio_button_at(int x, int y);       /* only the four +/- keys; -1 elsewhere */
+int view_audio_button_at(int x, int y);       /* mute and the four +/- keys; -1 elsewhere */
 int view_mode_button_at(int x, int y);        /* VIEW_MODE_0 + filter index, or -1 */
 int view_zoom_button_at(int x, int y);        /* VIEW_ZOOM_DN/UP or -1 */
 bool view_audio_overlay_at(int x, int y);     /* whole footer consumes touches */

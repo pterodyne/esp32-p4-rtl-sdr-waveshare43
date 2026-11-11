@@ -9,6 +9,7 @@
 bool audio_init(void);                       /* false (and logged) when the codec doesn't answer */
 void audio_set_mode(demod_mode_t mode, uint32_t bw_hz);
 void audio_set_volume(int v);                /* 0 = off, 1..10 */
+void audio_set_mute(bool on);                 /* codec mute, preserves volume and IQ stream */
 void audio_set_squelch(int level);           /* 0 = open, 1..9 */
 void audio_retuned(void);                    /* new station: RDS starts over */
 void audio_pause(bool on);                   /* other modes own the stream: silence, no reading */

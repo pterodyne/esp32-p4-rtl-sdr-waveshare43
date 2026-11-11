@@ -22,6 +22,8 @@ flashing continues, inspect UART logs for stream restarts and USB errors.
 The Waveshare header has six tuning keys: ±1 MHz, ±100 kHz, ±10 kHz for
 AM/FM, or ±1 MHz, ±1 kHz, ±100 Hz for SSB. Phosphor uses only green RGB565.
 Use the footer or **MENU → AUDIO** for 3 kHz USB/LSB reception.
+The footer **MUTE/UNMUTE** key silences the speaker without losing the saved
+volume or interrupting IQ reception; it resets to unmuted after a reboot.
 **MENU → RF INPUT** adds Bias-T and TUNER/ADC I/ADC Q. The firmware commands
 Bias-T OFF on boot and USB reconnect (unless EEPROM forces it ON), but a failed
 USB write leaves power unknown: RF INPUT shows "BIAS ? RETRY OFF" and OFF retries.

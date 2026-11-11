@@ -35,6 +35,7 @@
 #include "scan_view.h"
 #include "radio_scan.h"
 #include "audio.h"
+#include "ui_audio_policy.h"
 #include "rds.h"
 #include "ui.h"
 
@@ -52,6 +53,7 @@ static ctl_t s_ctl = {.range_auto = true, .ref_db = -20, .range_db = 60, .band =
                       .gain_label = sdr_gain_label, .gain_tenths = sdr_gain_tenths};
 static bool s_panel;                        /* Controls panel is up */
 static int s_audio_pressed = -1;            /* compact waterfall control held under the finger */
+static bool s_muted;                        /* temporary speaker mute; saved VOL is unchanged */
 static bool s_adsb, s_adsb_req;             /* in ADS-B mode / asked for it */
 static int s_av_action;                     /* last ADS-B screen key fired */
 static bool s_scan;                         /* in a Wi-Fi / BLE scanner */
@@ -224,17 +226,18 @@ static void show_audio(void)
     char l[24];
     rds_info_t r;
     rds_get(&r);
+    if (ui_should_log_rds(s_ctl.bw, s_mscan, s_muted, r.has_ps)) log_rds(&r);
     if (s_mscan) {
         snprintf(l, sizeof l, "SCAN M%d %s", s_mscan_i + 1, panel_bw_mode(s_ctl.bw));
-    } else if (s_ctl.bw == 0 && r.has_ps) {
-        log_rds(&r);
+    } else if (s_muted) snprintf(l, sizeof l, "%s MUTED", panel_bw_mode(s_ctl.bw));
+    else if (s_ctl.bw == 0 && r.has_ps) {
         int n = 8;
         while (n > 0 && r.ps[n - 1] == ' ') n--;
         snprintf(l, sizeof l, "WFM %.*s", n, r.ps);
     } else if (!s_ctl.vol) snprintf(l, sizeof l, "%s off", panel_bw_mode(s_ctl.bw));
     else if (s_ctl.sql && !audio_squelch_open()) snprintf(l, sizeof l, "%s %d  SQL", panel_bw_mode(s_ctl.bw), s_ctl.vol);
     else snprintf(l, sizeof l, "%s %d", panel_bw_mode(s_ctl.bw), s_ctl.vol);
-    view_set_audio(l, s_ctl.vol && audio_squelch_open());
+    view_set_audio(l, !s_muted && s_ctl.vol && audio_squelch_open());
 }
 
 /* -------------------------------------------------------------------------- touch -- */
@@ -298,6 +301,14 @@ static void turn(void)
 
 static void do_action(int act)
 {
+    if (act == VIEW_MUTE) {
+        s_muted = !s_muted;
+        audio_set_mute(s_muted); /* don't replace persisted volume or stop IQ/RDS processing */
+        view_set_mute(s_muted);
+        show_audio();
+        view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, s_audio_pressed);
+        return;
+    }
     if (act == VIEW_ZOOM_DN || act == VIEW_ZOOM_UP) {
         int z = s_ctl.zoom + (act == VIEW_ZOOM_UP ? 1 : -1);
         if (z >= 0 && z < PANEL_ZOOMS) {
@@ -552,7 +563,7 @@ static void poll_touch(const touch_cal_t *cal)
             s_audio_pressed = hot;
             view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, hot);
         }
-        if (hot >= 0 && now >= next_repeat) {
+        if (hot >= 0 && act != VIEW_MUTE && now >= next_repeat) {
             do_action(act);
             next_repeat = now + 150000;
         }

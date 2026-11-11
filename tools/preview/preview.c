@@ -436,6 +436,17 @@ static void test_audio_controls(void)
 #endif
             int x = LCD_W - 8 - 208, y = LCD_H - 8 - 72;
             assert(y > view_tune_y());
+            assert(view_audio_button_at(x + 94, y + 19) == VIEW_MUTE);
+            assert(view_audio_button_at(x + 94, y + 52) == -1);
+            int before_mute = s_blit_count;
+            view_set_mute(true);
+            view_audio_controls(5, 2, 4, 0, -1);
+            assert(s_blit_count > before_mute); /* mute updates the fixed footer */
+            before_mute = s_blit_count;
+            view_audio_controls(5, 2, 4, 0, -1);
+            assert(s_blit_count == before_mute); /* but not on every waterfall frame */
+            view_set_mute(false);
+            view_audio_controls(5, 2, 4, 0, -1);
             assert(view_audio_button_at(x + 144, y + 19) == VIEW_VOL_DN);
             assert(view_audio_button_at(x + 184, y + 19) == VIEW_VOL_UP);
             assert(view_audio_button_at(x + 144, y + 52) == VIEW_SQL_DN);

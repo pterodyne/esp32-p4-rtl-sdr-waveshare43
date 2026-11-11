@@ -160,7 +160,7 @@ static bool s_auto = true;                             /* dB range follows the n
 static float s_ref = -20, s_range = 60;                /* manual: top of the scale, height in dB */
 static uint16_t *s_hdr, *s_axis, *s_spec;
 static uint16_t *s_audio_ctrl;
-static bool s_footer_valid;
+static bool s_footer_valid, s_muted;
 static int s_footer_vol, s_footer_sql, s_footer_bw, s_footer_zoom, s_footer_pressed;
 static uint16_t *s_wf;                       /* 2*wf_h rows, each line stored twice */
 static int s_wf_head;
@@ -259,8 +259,8 @@ void view_set_audio(const char *label, bool live)
     s_audio_live = live;
 }
 
-/* Overlay anchored inside the waterfall, away from the top-row signal markers and menu.
- * The label occupies most of each row; only the two 36x31 keys accept touch. */
+/* Controls live in the fixed footer below the waterfall; only drawn keys
+ * accept touch, so tapping the volume label does not accidentally toggle mute. */
 static int audio_x(void) { return LCD_W - 8 - AUDIO_CTRL_W; }
 static int audio_y(void) { return LCD_H - 8 - AUDIO_CTRL_H; }
 
@@ -307,6 +307,7 @@ int view_zoom_button_at(int x, int y)
 int view_audio_button_at(int x, int y)
 {
     x -= audio_x(); y -= audio_y();
+    if (x >= 64 && x < 122 && y >= 4 && y < 35) return VIEW_MUTE;
     if (x < 126 || x >= 202 || y < 4 || y >= 68) return -1;
     int row = y >= 37 ? 1 : 0;
     if (y >= 35 && y < 37) return -1;
@@ -351,6 +352,13 @@ void view_audio_controls(int vol, int sql, int bw, int zoom, int pressed)
                     b.y + (b.h - 16) / 2, modes[i], on ? btn_text(true) : T->txt, 1);
     }
     int ox = audio_x();
+    int my = FOOTER_H - 80 + 4;
+    bool mute_lit = s_muted || pressed == VIEW_MUTE;
+    rpi_cv_rrect(&c, ox + 64, my, 58, 31, T->hdr == HDR_PORTAPACK ? 0 : 4,
+                 mute_lit ? T->btn_on : T->btn);
+    const char *mute_label = s_muted ? "UNMUTE" : "MUTE";
+    rpi_cv_text(&c, ox + 64 + (58 - rpi_cv_text_w(mute_label, 1)) / 2, my + 7,
+                mute_label, mute_lit ? btn_text(true) : T->txt, 1);
     for (int row = 0; row < 2; row++) {
         int y = FOOTER_H - 80 + 4 + row * 33;
         char text[20];
@@ -375,6 +383,11 @@ void view_audio_controls(int vol, int sql, int bw, int zoom, int pressed)
 }
 
 void view_footer_invalidate(void) { s_footer_valid = false; }
+
+void view_set_mute(bool muted)
+{
+    if (s_muted != muted) { s_muted = muted; view_footer_invalidate(); }
+}
 
 void view_set_range(bool auto_range, float ref_db, float range_db)
 {

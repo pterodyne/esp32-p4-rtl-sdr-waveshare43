@@ -17,8 +17,10 @@ The waterfall stops above a fixed **112-pixel footer**: a **ZOOM −/+** row
 changes the spectrum/waterfall's horizontal span through 2.4 MHz, 1.2 MHz,
 600 kHz and 300 kHz (hold to repeat). The vertical dB scale is still under
 **MENU → RANGE**. Six mode buttons
-(WFM, NFM25, NFM12, AM, USB, LSB) are on the left and **VOL −/+** and
-**SQL −/+** on the right. Hold an audio key to repeat. Volume ranges from
+(WFM, NFM25, NFM12, AM, USB, LSB) are on the left and **MUTE/UNMUTE**, **VOL −/+**
+and **SQL −/+** on the right. Mute silences the speaker without changing the
+saved volume or stopping the RF stream; tap again to restore the same level.
+Hold the volume/squelch keys to repeat (mute is a single toggle). Volume ranges from
 0 (off) to 10 and squelch from 0 (open) to 9; **MENU → AUDIO** also offers
 these modes and settings. The three tuning steps per direction are
 **1 MHz / 100 kHz / 10 kHz** in AM/FM and **1 MHz / 1 kHz / 100 Hz** in SSB;
