@@ -426,7 +426,6 @@ static void layout(void)
         for (int i = 0; i < 6; i++)
             s_btn[steps[i].id] = (button_t){steps[i].x, y, steps[i].w, h, lbl[steps[i].id]};
         s_btn[VIEW_GAIN] = (button_t){738, y, 56, h, NULL};
-        s_btn[VIEW_THEME] = (button_t){220, y, 298, h, NULL};
         s_hdr_h = T->hdr_h;
         s_spec_h = T->spec_h;
         s_ro_x0 = 220; s_ro_x1 = 518;
@@ -441,7 +440,7 @@ static void layout(void)
 #else
     if (!LCD_PORTRAIT) {
         static const int bx[VIEW_NBTN][2] = {
-            {4, 44}, {52, 54}, {318, 54}, {376, 44}, {0, 0}, {0, 0}, {424, 52}, {110, 204}
+            {4, 44}, {52, 54}, {318, 54}, {376, 44}, {0, 0}, {0, 0}, {424, 52}
         };
         for (int i = 0; i < VIEW_NBTN; i++) {
             int x = bx[i][0] * LCD_W / 480;
@@ -458,7 +457,6 @@ static void layout(void)
     for (int i = 0; i < 4; i++) s_btn[i] = (button_t){4 + i * (kw + 4), T->hdr_h + 3, kw, PORT_KEYS - 6, lbl[i]};
 #endif
     s_btn[VIEW_GAIN] = (button_t){LCD_W - 56, y, 52, h, NULL};
-    s_btn[VIEW_THEME] = (button_t){4, y, LCD_W - 64, h, NULL};
     s_hdr_h = T->hdr_h + PORT_KEYS;
     s_spec_h = T->spec_h + PORT_SPEC;
     s_ro_x0 = 4;
