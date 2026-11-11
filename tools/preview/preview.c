@@ -666,8 +666,43 @@ static void test_ism_bands(void)
     puts("North American RX presets: 315, 345, 433.92 and 915 MHz");
 }
 
+static void test_theme_header_disabled(void)
+{
+    view_init(RATE);
+    panel_init();
+    for (int portrait = 0; portrait < 2; portrait++) {
+        rpi_lcd_set_portrait(portrait != 0);
+        for (int look = 0; look < view_themes(); look++) {
+            view_set_theme(look);
+            assert(view_button_at(LCD_W / 2, 20) == -1); /* frequency is not a theme switch */
+            assert(view_button_at(LCD_W - 30, 20) == VIEW_GAIN); /* MENU still works */
+            assert(view_theme() == look);
+        }
+        ctl_t ct = {.gain_idx = 0, .gain_n = 30, .gain_label = gain_label,
+                    .gain_tenths = gain_tenths};
+        panel_open(&ct);
+        int cols = LCD_PORTRAIT ? 2 : 4, rows = LCD_PORTRAIT ? 5 : 3;
+        int cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
+        int ch = (LCD_H - view_tune_y() - 12 - 6 * (rows - 1)) / rows;
+        int x = 6 + (6 % cols) * (cw + 6) + cw / 2;
+        int y = view_tune_y() + 6 + (6 / cols) * (ch + 6) + ch / 2;
+        panel_touch(&ct, PANEL_PRESS, x, y, 0);
+        panel_touch(&ct, PANEL_RELEASE, x, y, 0); /* Controls > LOOK */
+        int bh = LCD_H - view_tune_y() - 62;
+        cw = (LCD_W - 18) / 2;
+        ch = (bh - 12) / 3;
+        x = 6 + (cw + 6) + cw / 2;
+        y = view_tune_y() + 56 + ch / 2;
+        panel_touch(&ct, PANEL_PRESS, x, y, 0);
+        assert(panel_touch(&ct, PANEL_RELEASE, x, y, 0) & CTL_LOOK);
+        assert(ct.look == 1); /* explicit look selection remains available */
+    }
+    puts("header frequency inert; Controls remains accessible across looks and orientations");
+}
+
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--test-theme")) { test_theme_header_disabled(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-audio")) { test_audio_controls(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-phosphor")) { test_phosphor_green(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-footer-recovery")) { test_footer_stream_recovery(); return 0; }

@@ -1,7 +1,7 @@
 /* Receiver loop: IQ -> spectrum -> view (drawing lives in view.c and panel.c), touch, settings.
  *
  * Tap the spectrum or waterfall to tune there. Hold a step button to repeat. Tap the frequency
- * readout for the next look (or pick one on the LOOK page). Tap MENU (top right, gain shown under it) for Controls (gain, dB range, zoom,
+ * readout is display-only; pick a look on the LOOK page. Tap MENU (top right, gain shown under it) for Controls (gain, dB range, zoom,
  * audio: filter and mode, volume, squelch; bands). Touch is sampled three times a frame; menu keys and tuning act when the finger lifts. Everything is kept in NVS namespace "sdr": freq, gaint (tenths of a dB,
  * -1 = AGC), theme, rauto, ref, rspan, zoom, bw, vol, sql, mem (blob: the channel memories); logn is the SD log session (sdlog.c). */
 #include <assert.h>
@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "nvs.h"
+#include "theme_store.h"
 #include "rpi_lcd.h"
 #include "rpi_text.h"
 #include "xpt2046.h"
@@ -69,6 +70,7 @@ static void draw_header(int pressed) { view_header(sdr_freq(), sdr_gain_label(sd
 
 static nvs_handle_t s_nvs;
 static int64_t s_save_at;
+static bool s_theme_save_failed;
 
 static void settings_changed(void) { s_save_at = esp_timer_get_time() + 3000000; }
 
@@ -271,12 +273,20 @@ static void panel_show(bool on)
 
 static void set_look(int i)
 {
+    int previous = view_theme();
     view_set_theme(i);                         /* clears the screen */
     apply_view();
     ESP_LOGI(TAG, "look: %s", view_theme_name(view_theme()));
     if (s_panel) panel_redraw(&s_ctl);
     else view_axis(sdr_freq());
-    settings_changed();
+    if (theme_store_should_save(previous, view_theme(), s_theme_save_failed)) {
+        esp_err_t err = theme_store_save(s_nvs, view_theme());
+        s_theme_save_failed = err != ESP_OK;
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "look save failed (%s); retrying with settings", esp_err_to_name(err));
+            settings_changed();
+        }
+    }
 }
 
 /* Saved at once (main.c reads it before the splash), then re-layout the UI. */
@@ -364,7 +374,6 @@ static void do_action(int act)
     case VIEW_DN100:  retune(f > smallest ? f - smallest : 0); break;
     case VIEW_UP100:  retune(f + smallest); break;
     case VIEW_GAIN:   panel_show(!s_panel); break;
-    case VIEW_THEME:  set_look((view_theme() + 1) % view_themes()); break;
     }
     draw_header(act);                       /* keep the key lit while held */
 }

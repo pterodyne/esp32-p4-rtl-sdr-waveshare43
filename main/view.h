@@ -3,7 +3,7 @@
  * besides rpi_lcd/rpi_text, so tools/preview builds it on a PC.
  *
  * Every theme stacks the same four bands, with its own heights:
- *   header   [-1M] [-100k]  frequency  [+100k] [+1M] [gain]   (tap the frequency: next theme)
+ *   header   [-1M] [-100k]  frequency  [+100k] [+1M] [gain]   (frequency is display-only)
  *   spectrum 2.4 MHz wide (5 kHz per column)
  *   axis     frequency scale
  *   waterfall, newest line on top */

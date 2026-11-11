@@ -13,6 +13,12 @@ touch through 0°, 90°, 180° and 270° clockwise from the native portrait
 orientation; the choice is saved for the next boot. Four-way rotation has been
 confirmed working on the user's rev3 board.
 
+Choose a color scheme through **MENU → LOOK**. The frequency display across the
+top no longer cycles themes when tapped. A chosen look is committed to NVS
+immediately (rather than after the usual three-second settings delay) and is
+loaded for the splash screen on the next boot, including after power removal.
+This behavior has host tests and cross-builds; it has not been rechecked on the board.
+
 The waterfall stops above a fixed **112-pixel footer**: a **ZOOM −/+** row
 changes the spectrum/waterfall's horizontal span through 2.4 MHz, 1.2 MHz,
 600 kHz and 300 kHz (hold to repeat). The vertical dB scale is still under
