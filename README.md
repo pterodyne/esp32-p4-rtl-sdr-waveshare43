@@ -52,6 +52,12 @@ V4 to the HF frequency in TUNER mode. On other dongles, I/Q only works if the
 corresponding ADC input is physically wired. Direct mode, unlike Bias-T, is
 saved and reapplied after device reopen. See the [V4 user's guide](https://www.rtl-sdr.com/v4/).
 
+**MENU → BAND** includes North American receive presets at 315 MHz and
+345 MHz (low-power Part 15 devices), 433.92 MHz (the existing 433/70CM slot),
+and 915 MHz (within the 902–928 MHz ISM band). These tune the receiver and
+choose a listening filter; they are **not** packet decoders. Device protocols
+may use OOK, FSK or other modulation and need their own decoding path.
+
 ## Hardware status
 
 | Image | P4 revision | Status on this board |

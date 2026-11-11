@@ -32,6 +32,9 @@ only enable it for a compatible active antenna/LNA with adequate USB supply. On 
 and V4L the ADC I/Q keys are shown but disabled: HF uses the onboard
 upconverter, and forcing direct sampling yields no RF input. Other dongles
 require the selected ADC input to be physically wired. Direct mode is persisted.
+**MENU → BAND** also has North American RX presets at 315, 345, 433.92
+(the existing 433/70CM slot), and 915 MHz. Presets tune/choose an audio
+filter; they do not themselves identify or decode sensor packets.
 SSB currently has a fixed audio gain rather than speech AGC; set SQL to OPEN
 (0) because its power-based squelch can mute an already-present voice signal.
 

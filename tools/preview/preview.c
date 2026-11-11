@@ -624,12 +624,55 @@ static void test_rf_settings(void)
     puts("RF settings: bias, I/Q selection, V4 and EEPROM restrictions in both orientations");
 }
 
+static void test_ism_bands(void)
+{
+    assert(PANEL_BANDS == 11); /* append; preserve eight existing preset indexes */
+    static const uint32_t hz[] = {315000000, 345000000, 915000000};
+    for (int i = 0; i < 3; i++) {
+        uint32_t freq;
+        int bw, zoom;
+        const char *name = panel_band(8 + i, &freq, &bw, &zoom);
+        assert(name && freq == hz[i]);
+        assert(bw >= 0 && bw < PANEL_BWS && zoom >= 0 && zoom < PANEL_ZOOMS);
+    }
+    uint32_t freq;
+    int bw, zoom;
+    assert(panel_band(6, &freq, &bw, &zoom) && freq == 433920000); /* existing 70cm/433 slot */
+    view_init(RATE);
+    panel_init();
+    for (int portrait = 0; portrait < 2; portrait++) {
+        rpi_lcd_set_portrait(portrait != 0);
+        ctl_t ct = {.gain_label = gain_label, .gain_tenths = gain_tenths, .gain_n = 30};
+        panel_open(&ct);
+        int cols = portrait ? 2 : 4, rows = portrait ? 5 : 3;
+        int cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
+        int ch = (LCD_H - view_tune_y() - 12 - 6 * (rows - 1)) / rows;
+        int mx = 6 + (4 % cols) * (cw + 6) + cw / 2;
+        int my = view_tune_y() + 6 + (4 / cols) * (ch + 6) + ch / 2;
+        panel_touch(&ct, PANEL_PRESS, mx, my, 0);
+        panel_touch(&ct, PANEL_RELEASE, mx, my, 0); /* BAND page */
+        int by = view_tune_y() + 56, bh = LCD_H - view_tune_y() - 62;
+        int grid_rows = (PANEL_BANDS + cols - 1) / cols;
+        cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
+        ch = (bh - 6 * (grid_rows - 1)) / grid_rows;
+        for (int i = 8; i < PANEL_BANDS; i++) {
+            int x = 6 + (i % cols) * (cw + 6) + cw / 2;
+            int y = by + (i / cols) * (ch + 6) + ch / 2;
+            panel_touch(&ct, PANEL_PRESS, x, y, 0);
+            assert(panel_touch(&ct, PANEL_RELEASE, x, y, 0) & CTL_BAND);
+            assert(ct.band == i);
+        }
+    }
+    puts("North American RX presets: 315, 345, 433.92 and 915 MHz");
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "--test-audio")) { test_audio_controls(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-phosphor")) { test_phosphor_green(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-footer-recovery")) { test_footer_stream_recovery(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-rf")) { test_rf_settings(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "--test-ism")) { test_ism_bands(); return 0; }
     if (argc > 2 && !strcmp(argv[1], "--audio-snapshot")) {
         static float db[1024];
         view_init(RATE);

@@ -32,7 +32,10 @@ static const band_t s_band[PANEL_BANDS] = {
     {"FM", "98.0", 98000000, 0, 0},        {"AIR", "121.5", 121500000, 3, 0},
     {"MARINE", "156.8", 156800000, 1, 1},  {"NOAA", "162.475", 162475000, 1, 2},
     {"2M", "145.0", 145000000, 2, 0},      {"PMR", "446.1", 446100000, 2, 2},
-    {"70CM", "433.92", 433920000, 1, 0},   {"ADS-B", "1090", 1090000000, 0, 0},
+    {"433/70CM", "433.92", 433920000, 1, 0}, {"ADS-B", "1090", 1090000000, 0, 0},
+    {"315 RX", "Part 15", 315000000, 2, 2},
+    {"345 RX", "Part 15", 345000000, 2, 2},
+    {"915 ISM", "902-928", 915000000, 1, 1},
 };
 
 uint32_t panel_zoom_hz(int i) { return s_zoom_hz[i >= 0 && i < PANEL_ZOOMS ? i : 0]; }
@@ -208,8 +211,10 @@ static void build(const ctl_t *c)
         break;
     }
     case P_BAND:
+        /* The old eight keep their indexes; extra presets require another row. */
         for (int i = 0; i < PANEL_BANDS; i++)
-            grid(GAP, by, bw, bh, c4, r2, i, K_BAND + i, s_band[i].name, s_band[i].sub)->sel = i == c->band;
+            grid(GAP, by, bw, bh, c4, (PANEL_BANDS + c4 - 1) / c4,
+                 i, K_BAND + i, s_band[i].name, s_band[i].sub)->sel = i == c->band;
         break;
     case P_SCAN:                             /* Wi-Fi and BLE run on the module's ESP32-C6 */
         grid(GAP, by, bw, bh, 2, 2, 0, K_WIFI, "WIFI", p ? "networks" : "access points, channels")->big = true;
