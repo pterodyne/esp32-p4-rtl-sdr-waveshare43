@@ -51,6 +51,7 @@ static float s_db[NFFT_MAX];
 static ctl_t s_ctl = {.range_auto = true, .ref_db = -20, .range_db = 60, .band = -1,
                       .gain_label = sdr_gain_label, .gain_tenths = sdr_gain_tenths};
 static bool s_panel;                        /* Controls panel is up */
+static int s_audio_pressed = -1;            /* compact waterfall control held under the finger */
 static bool s_adsb, s_adsb_req;             /* in ADS-B mode / asked for it */
 static int s_av_action;                     /* last ADS-B screen key fired */
 static bool s_scan;                         /* in a Wi-Fi / BLE scanner */
@@ -102,13 +103,16 @@ static void apply_view(void)
     spectrum_set_size(n > NFFT_MAX ? NFFT_MAX : n);
     view_set_span(panel_zoom_hz(s_ctl.zoom));
     view_set_passband(panel_bw_hz(s_ctl.bw));
+    view_set_sideband(s_ctl.bw == 4 ? 1 : s_ctl.bw == 5 ? -1 : 0);
+    view_set_fine_tune(s_ctl.bw >= 4);
     view_set_range(s_ctl.range_auto, s_ctl.ref_db, s_ctl.range_db);
 }
 
-/* the filter picks the demodulator: 200k WFM, 25k and 12.5k NFM, 8k AM */
+/* Keep the original four persisted mode indexes; SSB adds upper and lower sidebands. */
 static void apply_audio(void)
 {
-    demod_mode_t m = s_ctl.bw == 0 ? DEMOD_WFM : s_ctl.bw == PANEL_BWS - 1 ? DEMOD_AM : DEMOD_NFM;
+    demod_mode_t m = s_ctl.bw == 0 ? DEMOD_WFM : s_ctl.bw == 3 ? DEMOD_AM :
+                     s_ctl.bw == 4 ? DEMOD_USB : s_ctl.bw == 5 ? DEMOD_LSB : DEMOD_NFM;
     audio_set_mode(m, panel_bw_hz(s_ctl.bw));
     audio_set_volume(s_ctl.vol);
     audio_set_squelch(s_ctl.sql);
@@ -144,6 +148,8 @@ static void tune_memory(int i)
     sdr_set_freq(s_ctl.mem_hz[i]);
     audio_retuned();
     view_set_passband(panel_bw_hz(s_ctl.bw));   /* not apply_view: that clears the waterfall */
+    view_set_sideband(s_ctl.bw == 4 ? 1 : s_ctl.bw == 5 ? -1 : 0);
+    view_set_fine_tune(s_ctl.bw >= 4);
     apply_audio();
     s_ctl.freq = sdr_freq();
     if (!s_panel) view_axis(sdr_freq());
@@ -285,12 +291,26 @@ static void turn(void)
 
 static void do_action(int act)
 {
+    if (act >= VIEW_VOL_DN && act <= VIEW_SQL_UP) {
+        int prev = act <= VIEW_VOL_UP ? s_ctl.vol : s_ctl.sql;
+        if (act == VIEW_VOL_DN && s_ctl.vol > 0) s_ctl.vol--;
+        if (act == VIEW_VOL_UP && s_ctl.vol < 10) s_ctl.vol++;
+        if (act == VIEW_SQL_DN && s_ctl.sql > 0) s_ctl.sql--;
+        if (act == VIEW_SQL_UP && s_ctl.sql < 9) s_ctl.sql++;
+        if (act <= VIEW_VOL_UP) {
+            if (prev != s_ctl.vol) { audio_set_volume(s_ctl.vol); settings_changed(); }
+        } else if (prev != s_ctl.sql) { audio_set_squelch(s_ctl.sql); settings_changed(); }
+        view_audio_controls(s_ctl.vol, s_ctl.sql, s_audio_pressed);
+        return;
+    }
     uint32_t f = sdr_freq();
+    uint32_t coarse = s_ctl.bw >= 4 ? 1000 : 1000000;
+    uint32_t fine = s_ctl.bw >= 4 ? 100 : 100000;
     switch (act) {
-    case VIEW_DN1M:   retune(f > 1000000 ? f - 1000000 : 0); break;
-    case VIEW_DN100K: retune(f > 100000 ? f - 100000 : 0); break;
-    case VIEW_UP100K: retune(f + 100000); break;
-    case VIEW_UP1M:   retune(f + 1000000); break;
+    case VIEW_DN1M:   retune(f > coarse ? f - coarse : 0); break;
+    case VIEW_DN100K: retune(f > fine ? f - fine : 0); break;
+    case VIEW_UP100K: retune(f + fine); break;
+    case VIEW_UP1M:   retune(f + coarse); break;
     case VIEW_GAIN:   panel_show(!s_panel); break;
     case VIEW_THEME:  set_look((view_theme() + 1) % view_themes()); break;
     }
@@ -351,6 +371,7 @@ static void panel_event(int ev, int x, int y, int64_t now)
         return;
     }
     if (ch & (CTL_RANGE | CTL_ZOOM | CTL_BW | CTL_BAND)) apply_view();
+    if (ch & CTL_BW) draw_header(-1);
     if (ch & (CTL_BW | CTL_BAND | CTL_AUDIO)) apply_audio();
     if (ch) settings_changed();
 }
@@ -362,7 +383,7 @@ static void poll_touch(const touch_cal_t *cal)
 {
     static bool down;
     static int n, x, y;
-    static int where;                       /* 0 header, 1 panel, 2 spectrum, 3 ADS-B, 4 scanner, 5 none */
+    static int where;                       /* 0 header, 1 panel, 2 tuning, 3 ADS-B, 4 scanner, 5 none, 6 audio */
     static int act = -1;
     static int64_t next_repeat;
     uint16_t rx, ry, rz;
@@ -373,9 +394,11 @@ static void poll_touch(const touch_cal_t *cal)
             if (where == 3) s_av_action = adsb_view_touch(AV_RELEASE, x, y);
             else if (where == 4) s_sv_action = scan_view_touch(SV_RELEASE, x, y);
             else if (where == 0 && act >= 0) draw_header(-1);
+            else if (where == 6) { s_audio_pressed = -1; view_audio_controls(s_ctl.vol, s_ctl.sql, -1); }
             else if (where == 1) panel_event(PANEL_RELEASE, x, y, now);
-            else if (where == 2 && !s_panel) {
-                int step = s_ctl.zoom == 0 ? 10000 : s_ctl.zoom == 1 ? 5000 : 1000;
+            else if (where == 2 && !s_panel && !view_audio_overlay_at(x, y)) {
+                int step = s_ctl.bw >= 4 ? (s_ctl.zoom >= 2 ? 100 : 1000) :
+                           s_ctl.zoom == 0 ? 10000 : s_ctl.zoom == 1 ? 5000 : 1000;
                 int64_t f = (int64_t)sdr_freq() + (int64_t)(x - LCD_W / 2) * view_hz_per_px();
                 f = (f + step / 2) / step * step;
                 retune(f > 0 ? (uint32_t)f : 0);
@@ -408,6 +431,13 @@ static void poll_touch(const touch_cal_t *cal)
         } else if (s_panel) {
             where = 1;
             panel_event(PANEL_PRESS, x, y, now);
+        } else if ((act = view_audio_button_at(x, y)) >= 0) {
+            where = 6;
+            s_audio_pressed = act;
+            do_action(act);
+            next_repeat = now + 450000;
+        } else if (view_audio_overlay_at(x, y)) {
+            where = 5;                       /* label/padding: never retune underneath */
         } else {
             where = 2;
         }
@@ -418,6 +448,17 @@ static void poll_touch(const touch_cal_t *cal)
     if (where == 3) adsb_view_touch(AV_MOVE, x, y);
     else if (where == 4) scan_view_touch(SV_MOVE, x, y);
     else if (where == 1) panel_event(PANEL_MOVE, x, y, now);
+    else if (where == 6) {
+        int hot = view_audio_button_at(x, y) == act ? act : -1;
+        if (hot != s_audio_pressed) {
+            s_audio_pressed = hot;
+            view_audio_controls(s_ctl.vol, s_ctl.sql, hot);
+        }
+        if (hot >= 0 && now >= next_repeat) {
+            do_action(act);
+            next_repeat = now + 150000;
+        }
+    }
     else if (where == 0 && act >= 0 && act <= VIEW_UP1M && now >= next_repeat) {
         do_action(act);
         next_repeat = now + 150000;
@@ -760,7 +801,10 @@ void ui_run(const touch_cal_t *cal)
         poll_touch(cal);
         if (!s_panel) view_blit_spectrum();    /* the waterfall keeps filling behind the panel */
         poll_touch(cal);
-        if (!s_panel) view_blit_waterfall();
+        if (!s_panel) {
+            view_blit_waterfall();
+            view_audio_controls(s_ctl.vol, s_ctl.sql, s_audio_pressed);
+        }
         int64_t t2 = esp_timer_get_time();
         t_dsp += t1 - t0;
         t_lcd += t2 - t1;

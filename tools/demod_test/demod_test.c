@@ -131,6 +131,42 @@ static double rms(int from, int n)
     return sqrt(a / (n - from));
 }
 
+/* Analytic IQ tones at the suppressed-carrier frequency: +f is USB, -f is LSB.
+ * Unequal pitches make an accidental real(IQ) demodulator fail visibly. */
+static void ssb_case(demod_mode_t mode, double wanted_sign)
+{
+    const char *name = wanted_sign > 0 ? "USB" : "LSB";
+    CHECK(!strcmp(demod_mode_name(mode), name), "%s mode name", name);
+    for (int n = 0; n < N; n++) {
+        double t = (double)n / FS;
+        double wanted = 2 * M_PI * 1000 * t;
+        double unwanted = 2 * M_PI * 1400 * t;
+        double i = 0.12 * cos(wanted) + 0.12 * cos(unwanted);
+        double q = 0.12 * wanted_sign * sin(wanted) - 0.12 * wanted_sign * sin(unwanted);
+        s_iq[2 * n] = q8(i);
+        s_iq[2 * n + 1] = q8(q);
+    }
+    demod_set(mode, 3000);
+    demod_set_squelch(0);
+    double cpu;
+    int k = run(&cpu), from = DEMOD_OUT_RATE / 20;
+    CHECK(abs(k - N / 50) <= 1, "%s audio count %d", name, k);
+    CHECK(demod_open(), "%s SQL=0 must open", name);
+    double wanted_power, rest, rejected_power, rest2;
+    fit(s_out, from, k, 1000, &wanted_power, &rest);
+    fit(s_out, from, k, 1400, &rejected_power, &rest2);
+    printf("%-26s 1k %.1f dBFS, opposite 1.4k %.1f dB below, CPU %.1f%% realtime\n",
+           name, db(wanted_power / (32767.0 * 32767.0 / 2)),
+           db(wanted_power / (rejected_power + 1e-9)), cpu * 100 / SECS);
+    CHECK(db(wanted_power / (32767.0 * 32767.0 / 2)) > -25,
+          "%s: wanted 1k tone absent", name);
+    CHECK(db(rejected_power / (wanted_power + 1e-9)) < -30,
+          "%s: opposite sideband not rejected", name);
+    demod_set_squelch(9);
+    demod_retuned();
+    demod_set_squelch(0);
+    CHECK(demod_open(), "%s: SQL=0 must immediately reopen after a squelched retune", name);
+}
 
 /* ------------------------------------------------------------------ RDS station -- */
 
@@ -231,6 +267,9 @@ int main(void)
     station_t am[2] = {{1, 0.1, 0, 1000, 0.6, 0}, {1, 0.1, 8333, 2000, 0.6, 0}};
     tone_case("AM 8k", DEMOD_AM, 8000, am, 1, 0.005, 25, 0, 0);
     tone_case("AM 8k + 8.33k neighbour", DEMOD_AM, 8000, am, 2, 0.005, 20, 2000, -25);
+
+    ssb_case(DEMOD_USB, +1);
+    ssb_case(DEMOD_LSB, -1);
 
     /* squelch at level 3 (9 dB), per mode: a station already on the air when the mode is set
      * opens it (FM); noise alone shuts it; a station that comes up opens it again without a jump

@@ -11,13 +11,23 @@ scanning through the on-board ESP32-C6. Features beyond the display have not
 all been checked on this board. **MENU → LOOK → TURN** cycles the screen and
 touch through 0°, 90°, 180° and 270° clockwise from the native portrait
 orientation; the choice is saved for the next boot. Four-way rotation has been
-host-tested and cross-compiled, but awaits on-board testing.
+confirmed working on the user's rev3 board.
+
+The receiver waterfall has compact **VOL −/+** and **SQL −/+** touch controls
+at its lower right; hold a key to repeat. Volume ranges from 0 (off) to 10,
+and squelch from 0 (open) to 9. **MENU → AUDIO** offers the original WFM,
+NFM and AM filters plus 3 kHz **USB** and **LSB** single-sideband modes.
+In SSB the tuning keys change from MHz/100 kHz steps to **1 kHz/100 Hz**
+for fine voice tuning; tune to the suppressed-carrier frequency. These new
+controls and SSB modes have host tests, but have not yet been verified on the
+board with a live signal. **Set SQL to OPEN (0) for SSB**: its nonzero
+power-based squelch may mute speech and does not discriminate sidebands.
 
 ## Hardware status
 
 | Image | P4 revision | Status on this board |
 | --- | --- | --- |
-| `p4-sdr-waveshare43-rev3.bin` | v3.1 and newer | **Previous rev3 image user-flashed: display and RTL-SDR on J3 work with USB-supplied power and no battery.** Four-way-rotation update is built but not yet hardware-tested. |
+| `p4-sdr-waveshare43-rev3.bin` | v3.1 and newer | **User-flashed: display, RTL-SDR on J3 with USB-supplied power and no battery, and four-way rotation work.** New waterfall controls and SSB are not yet hardware-tested. |
 | `p4-sdr-waveshare43-rev1.bin` | v1.x | Cross-compiled; not tested on this board. |
 
 **Battery-power limitation (user report):** with the RTL-SDR connected via J3,

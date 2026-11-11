@@ -3,6 +3,7 @@
  *
  * Build: make -C tools/preview */
 #include <math.h>
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -26,6 +27,9 @@ static uint16_t fb[LCD_LONG * LCD_SHORT];   /* LCD_W x LCD_H, either way round *
 #define FB(x, y) fb[(y) * LCD_W + (x)]
 
 int rpi_lcd_w = LCD_LONG, rpi_lcd_h = LCD_SHORT;
+#ifdef CONFIG_SDR_WAVESHARE_43
+int rpi_lcd_rotation;
+#endif
 
 esp_err_t rpi_lcd_set_portrait(bool on)
 {
@@ -180,6 +184,7 @@ static void render_all(const char *dir, const char *tag, uint32_t freq, int pres
             view_render(db, NFFT, freq);
         }
         view_blit();
+        view_audio_controls(5, 2, -1);
         char path[512];
         snprintf(path, sizeof path, "%s/%s%s.png", dir, tag, view_theme_name(t));
         write_png(path, fb, LCD_W, LCD_H);
@@ -364,8 +369,115 @@ static void render_all(const char *dir, const char *tag, uint32_t freq, int pres
 /* usage: preview OUT_DIR [freq_hz] [pressed_button]
  * Writes OUT_DIR/<theme>.png, <theme>-controls.png and the other screens for every theme, and
  * OUT_DIR/themes.png; then the same in portrait, named portrait-*. */
+static void test_audio_controls(void)
+{
+    assert(PANEL_BWS == 6);
+    assert(!strcmp(panel_bw_mode(4), "USB") && panel_bw_hz(4) == 3000);
+    assert(!strcmp(panel_bw_mode(5), "LSB") && panel_bw_hz(5) == 3000);
+    view_init(RATE);
+    panel_init();
+    for (int orientation = 0; orientation < 2; orientation++) {
+        rpi_lcd_set_portrait(orientation != 0);
+        for (int theme = 0; theme < view_themes(); theme++) {
+            view_set_theme(theme);
+            size_t header_bytes = (size_t)LCD_W * view_tune_y() * sizeof(uint16_t);
+            uint16_t *old_header = malloc(header_bytes);
+            assert(old_header);
+            view_set_fine_tune(true);
+            view_header(142000000, "AGC", -1);
+            memcpy(old_header, fb, header_bytes);
+            view_header(142000100, "AGC", -1);
+            assert(memcmp(old_header, fb, header_bytes)); /* 100 Hz must be visible */
+            view_set_fine_tune(false);
+            view_header(142000000, "AGC", -1);
+            memcpy(old_header, fb, header_bytes);
+            view_header(142000100, "AGC", -1);
+            assert(!memcmp(old_header, fb, header_bytes)); /* FM stays at whole kHz */
+            free(old_header);
+            int x = LCD_W - 8 - 208, y = LCD_H - 8 - 72;
+            assert(y > view_tune_y());
+            assert(view_audio_button_at(x + 144, y + 19) == VIEW_VOL_DN);
+            assert(view_audio_button_at(x + 184, y + 19) == VIEW_VOL_UP);
+            assert(view_audio_button_at(x + 144, y + 52) == VIEW_SQL_DN);
+            assert(view_audio_button_at(x + 184, y + 52) == VIEW_SQL_UP);
+            assert(view_audio_button_at(x - 1, y + 19) == -1);
+            assert(view_audio_button_at(x + 20, y + 19) == -1);
+            assert(view_audio_button_at(x + 184, y - 1) == -1);
+            assert(view_audio_button_at(x + 184, LCD_H - 1) == -1);
+            assert(view_audio_overlay_at(x + 20, y + 19));
+            assert(view_audio_overlay_at(x + 208 - 1, y + 71));
+            assert(!view_audio_overlay_at(x - 1, y + 19));
+            assert(!view_audio_overlay_at(x + 20, y - 1));
+            view_audio_controls(5, 2, -1);
+        }
+        ctl_t ct = {.gain_idx = 0, .gain_n = 30, .gain_label = gain_label,
+                    .gain_tenths = gain_tenths, .range_auto = true, .vol = 5};
+        panel_open(&ct);
+        int cols = LCD_PORTRAIT ? 2 : 4, rows = 8 / cols;
+        int cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
+        int ch = (LCD_H - view_tune_y() - 12 - 6 * (rows - 1)) / rows;
+        int menu_x = 6 + 3 % cols * (cw + 6) + cw / 2;
+        int menu_y = view_tune_y() + 6 + 3 / cols * (ch + 6) + ch / 2;
+        panel_touch(&ct, PANEL_PRESS, menu_x, menu_y, 0);
+        panel_touch(&ct, PANEL_RELEASE, menu_x, menu_y, 0);
+        int body = LCD_H - view_tune_y() - 56 - 6;
+        int hm = LCD_PORTRAIT ? (body - 18) / 2 : (body - 12) * 40 / 100;
+        cols = LCD_PORTRAIT ? 2 : 3;
+        cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
+        ch = (hm - 6 * ((PANEL_BWS / cols) - 1)) / (PANEL_BWS / cols);
+        for (int i = 4; i <= 5; i++) {
+            int px = 6 + (i % cols) * (cw + 6) + cw / 2;
+            int py = view_tune_y() + 56 + (i / cols) * (ch + 6) + ch / 2;
+            panel_touch(&ct, PANEL_PRESS, px, py, 0);
+            assert(panel_touch(&ct, PANEL_RELEASE, px, py, 0) & CTL_BW);
+            assert(ct.bw == i);
+        }
+        size_t screen_bytes = (size_t)LCD_W * LCD_H * sizeof(uint16_t);
+        uint16_t *saved = malloc(screen_bytes);
+        assert(saved);
+        ct.mem_bw[0] = 4;
+        ct.mem_hz[0] = 142000000;
+        panel_open_memory(&ct, false);
+        memcpy(saved, fb, screen_bytes);
+        ct.mem_hz[0] = 142000100;
+        panel_redraw(&ct);
+        assert(memcmp(saved, fb, screen_bytes)); /* SSB memory shows 100 Hz */
+        ct.mem_bw[0] = 0;
+        panel_redraw(&ct);
+        memcpy(saved, fb, screen_bytes);
+        ct.mem_hz[0] = 142000000;
+        panel_redraw(&ct);
+        assert(!memcmp(saved, fb, screen_bytes)); /* FM memory remains whole kHz */
+        free(saved);
+    }
+    puts("audio controls: hit regions and USB/LSB menu selection, all themes and orientations OK");
+}
+
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--test-audio")) { test_audio_controls(); return 0; }
+    if (argc > 2 && !strcmp(argv[1], "--audio-snapshot")) {
+        static float db[1024];
+        view_init(RATE);
+        view_set_theme(0);
+        view_set_passband(3000);
+        view_set_sideband(1);
+        view_set_fine_tune(true);
+        view_set_audio("USB 5", true);
+        view_header(142000100, "AGC", -1);
+        view_axis(142000100);
+        for (int frame = 0; frame < 80; frame++) {
+            for (int i = 0; i < 1024; i++)
+                db[i] = -89 + 3 * sin(i * 0.7 + frame * 0.4) +
+                        (i > 510 && i < 514 ? 30 : 0);
+            view_render(db, 1024, 142000100);
+        }
+        view_blit();
+        view_audio_controls(5, 2, -1);
+        write_png(argv[2], fb, LCD_W, LCD_H);
+        printf("%s\n", argv[2]);
+        return 0;
+    }
     const char *dir = argc > 1 ? argv[1] : ".";
     uint32_t freq = argc > 2 ? (uint32_t)strtoul(argv[2], NULL, 10) : 100000000;
     int pressed = argc > 3 ? atoi(argv[3]) : -1;

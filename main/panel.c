@@ -21,9 +21,11 @@
 static const uint32_t s_zoom_hz[PANEL_ZOOMS] = {2400000, 1200000, 600000, 300000};
 static const char *s_zoom_lbl[PANEL_ZOOMS] = {"2.4 MHz", "1.2 MHz", "600 kHz", "300 kHz"};
 static const char *s_zoom_sub[PANEL_ZOOMS] = {"whole span", "2x", "4x", "8x"};
-static const uint32_t s_bw_hz[PANEL_BWS] = {200000, 25000, 12500, 8000};
-static const char *s_bw_sub[PANEL_BWS] = {"200k FM radio", "25k wide", "12.5k narrow", "8k airband"};
-static const char *s_bw_mode[PANEL_BWS] = {"WFM", "NFM", "NFM", "AM"};
+/* Keep indexes 0..3 stable: they are persisted in NVS and channel-memory blobs. */
+static const uint32_t s_bw_hz[PANEL_BWS] = {200000, 25000, 12500, 8000, 3000, 3000};
+static const char *s_bw_sub[PANEL_BWS] = {"200k FM radio", "25k wide", "12.5k narrow", "8k airband",
+                                          "3k upper side", "3k lower side"};
+static const char *s_bw_mode[PANEL_BWS] = {"WFM", "NFM", "NFM", "AM", "USB", "LSB"};
 
 typedef struct { const char *name, *sub; uint32_t freq; int bw, zoom; } band_t;
 static const band_t s_band[PANEL_BANDS] = {
@@ -175,7 +177,7 @@ static void build(const ctl_t *c)
     case P_BW: {                             /* filter and mode, then volume and squelch */
         int hm = p ? (bh - 3 * GAP) / 2 : (bh - 2 * GAP) * 40 / 100, hs = (bh - hm - 2 * GAP) / 2;
         for (int i = 0; i < PANEL_BWS; i++)
-            grid(GAP, by, bw, hm, c4, p ? 2 : 1, i, K_BW + i, s_bw_mode[i], s_bw_sub[i])->sel = i == c->bw;
+            grid(GAP, by, bw, hm, p ? 2 : 3, 2 + p, i, K_BW + i, s_bw_mode[i], s_bw_sub[i])->sel = i == c->bw;
         snprintf(v, sizeof v, c->vol ? "%d" : "OFF", c->vol);
         stepper(by + hm + GAP, hs, K_VOL_DN, K_VOL_UP, v, "volume");
         snprintf(v, sizeof v, c->sql ? "%d" : "OPEN", c->sql);
@@ -197,7 +199,10 @@ static void build(const ctl_t *c)
         for (int i = 0; i < PANEL_MEMS; i++) {
             char f[16], sub[24];
             if (c->mem_hz[i]) {
-                snprintf(f, sizeof f, "%" PRIu32 ".%03" PRIu32, c->mem_hz[i] / 1000000, c->mem_hz[i] / 1000 % 1000);
+                if (c->mem_bw[i] == 4 || c->mem_bw[i] == 5)
+                    snprintf(f, sizeof f, "%" PRIu32 ".%03" PRIu32 "%01" PRIu32,
+                             c->mem_hz[i] / 1000000, c->mem_hz[i] / 1000 % 1000, c->mem_hz[i] / 100 % 10);
+                else snprintf(f, sizeof f, "%" PRIu32 ".%03" PRIu32, c->mem_hz[i] / 1000000, c->mem_hz[i] / 1000 % 1000);
                 snprintf(sub, sizeof sub, "M%d %s", i + 1, panel_bw_mode(c->mem_bw[i]));
             } else {
                 snprintf(f, sizeof f, "M%d", i + 1);

@@ -17,7 +17,7 @@
 #include <stdint.h>
 
 #define PANEL_ZOOMS 4
-#define PANEL_BWS   4
+#define PANEL_BWS   6
 #define PANEL_BANDS 8
 #define PANEL_MEMS  8
 
@@ -56,5 +56,5 @@ int panel_touch(ctl_t *c, int ev, int x, int y, int64_t now_us);
 
 uint32_t panel_zoom_hz(int i);
 uint32_t panel_bw_hz(int i);
-const char *panel_bw_mode(int i);           /* "WFM", "NFM" or "AM" */
+const char *panel_bw_mode(int i);           /* WFM, NFM, AM, USB or LSB */
 const char *panel_band(int i, uint32_t *freq, int *bw, int *zoom);

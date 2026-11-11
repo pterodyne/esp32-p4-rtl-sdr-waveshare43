@@ -11,7 +11,8 @@
 #include <stdint.h>
 #include "spectrum.h"
 
-enum { VIEW_DN1M, VIEW_DN100K, VIEW_UP100K, VIEW_UP1M, VIEW_GAIN, VIEW_THEME, VIEW_NBTN };
+enum { VIEW_DN1M, VIEW_DN100K, VIEW_UP100K, VIEW_UP1M, VIEW_GAIN, VIEW_THEME, VIEW_NBTN,
+       VIEW_VOL_DN, VIEW_VOL_UP, VIEW_SQL_DN, VIEW_SQL_UP };
 
 void view_init(uint32_t sample_rate);        /* allocates the frame buffers, aborts if out of memory */
 int view_themes(void);
@@ -31,8 +32,14 @@ void view_set_span(uint32_t span_hz);
 uint32_t view_span(void);
 int view_hz_per_px(void);
 void view_set_passband(uint32_t hz);         /* shaded filter width around the centre */
+void view_set_sideband(int side);            /* -1 LSB, 0 symmetric, +1 USB */
+void view_set_fine_tune(bool fine);          /* SSB: header steps 1 kHz / 100 Hz */
 /* plate at the top left of the spectrum: label (NULL = none), live = speaker lit */
 void view_set_audio(const char *label, bool live);
+/* Compact waterfall overlay; redraw after the waterfall blit (and on a key press). */
+void view_audio_controls(int vol, int sql, int pressed);
+int view_audio_button_at(int x, int y);       /* only the four +/- keys; -1 elsewhere */
+bool view_audio_overlay_at(int x, int y);     /* opaque labels must not retune the receiver */
 /* auto: scale follows the noise floor. Otherwise ref = top of the scale, range = height, dBFS. */
 void view_set_range(bool auto_range, float ref_db, float range_db);
 void view_blit(void);                        /* push spectrum + waterfall to the panel */

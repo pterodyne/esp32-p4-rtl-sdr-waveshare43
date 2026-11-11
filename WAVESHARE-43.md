@@ -11,6 +11,12 @@ portrait and **MENU → LOOK → TURN** cycles through all four 90-degree
 orientations (0°/90°/180°/270° clockwise), rotating touch with the picture.
 The selection is saved; older `port` portrait/landscape settings are migrated
 on load. Landscape draws in software, so it may be slower than portrait.
+The user has confirmed all four rotations work on a rev3 board. Compact
+waterfall VOL/SQL touch steppers and USB/LSB sideband reception are newer
+additions, not yet tested on board; use **MENU → AUDIO** for 3 kHz USB/LSB,
+then the header's 1 kHz and 100 Hz step keys for fine tuning.
+SSB currently has a fixed audio gain rather than speech AGC; set SQL to OPEN
+(0) because its power-based squelch can mute an already-present voice signal.
 
 **USB host wiring:** the 40-pin J3 header exposes the *same* native high-speed
 USB controller as the Type-C **USB OTG** connector: J3 pin 27 is D+ (`USBD_P`),
@@ -54,9 +60,9 @@ Use `dist/p4-sdr-waveshare43-rev1.bin` if your P4 is revision v1.x. Compare
 against `dist/SHA256SUMS-waveshare43` before flashing. A full-image flash can
 overwrite saved settings and channel memories. **A previous rev3 full-flash
 image was user-flashed on this board: its display and RTL-SDR via J3 worked
-with USB-supplied power and no battery.** The updated four-way rotation build
-has passed host geometry tests and cross-compilation but has not yet been
-flashed/verified on the board. Rev1 remains cross-compiled and untested.
+with USB-supplied power and no battery, and its four-way rotation update was
+also confirmed working by the user.** The newer audio controls and SSB modes
+have not yet been verified on hardware. Rev1 remains cross-compiled and untested.
 Inspect the UART console at 115200 baud when testing new functions. The ESP32-C6
 may need compatible ESP-Hosted coprocessor firmware for Wi-Fi/BLE scanning;
 audio and SD operation have not been verified on this board.

@@ -1,4 +1,4 @@
-/* WFM / NFM / AM demodulator: CIC then FIR decimation, discriminator or envelope, squelch. */
+/* WFM / NFM / AM / SSB demodulator: CIC, FIR decimation, sideband-selective audio. */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,7 +23,7 @@
 static uint32_t s_int[CIC_N][2], s_comb[CIC_N][2];
 static int s_cic_ph;
 static fir_t s_w1, s_w2;                      /* WFM audio: 480k -> 96k -> 48k, real */
-static fir_t s_n1, s_n2;                      /* NFM / AM channel: 480k -> 96k -> 48k, complex */
+static fir_t s_n1, s_n2;                      /* NFM / AM / SSB channel: 480k -> 96k -> 48k, complex */
 static float *s_tmp;                          /* stage outputs that feed two places */
 static demod_mode_t s_mode;
 static float s_fm_gain;                       /* radians per sample -> audio */
@@ -35,6 +35,56 @@ static bool s_floor_set, s_open = true;
 static int s_sql, s_hang;
 static float s_pd, s_msd = 1, s_ref = 1;      /* FM noise: last phase step, mean square change, its noise-only value */
 static float s_quality;                       /* dB the squelch compares: FM quiet, AM above the floor */
+
+/* At 48 kS/s a 241-tap analytic bandpass selects positive or negative audio-frequency IQ.
+ * Unlike real(IQ), this rejects the other side of the suppressed carrier. The complex output's
+ * real component has the original audio pitch; no BFO shift or phase reset per chunk is needed. */
+#define SSB_TAPS 241
+static float s_ssb_re[SSB_TAPS], s_ssb_im[SSB_TAPS];
+static float s_ssb_i[SSB_TAPS], s_ssb_q[SSB_TAPS];
+static int s_ssb_pos;
+static float s_ssb_dc;
+
+static void ssb_design(demod_mode_t mode, uint32_t bw_hz)
+{
+    float bw = fmaxf(2400.0f, fminf(3600.0f, (float)bw_hz));
+    float center = bw * 0.6f, cut = center;
+    float sum = 0;
+    for (int j = 0; j < SSB_TAPS; j++) {
+        int d = j - (SSB_TAPS - 1) / 2;
+        float window = 0.42f - 0.5f * cosf(2 * PI_F * j / (SSB_TAPS - 1)) +
+                       0.08f * cosf(4 * PI_F * j / (SSB_TAPS - 1));
+        float h = d ? sinf(2 * PI_F * cut * d / DEMOD_OUT_RATE) / (PI_F * d) :
+                      2 * cut / DEMOD_OUT_RATE;
+        s_ssb_re[j] = h * window;
+        sum += s_ssb_re[j];
+    }
+    for (int j = 0; j < SSB_TAPS; j++) {
+        float angle = 2 * PI_F * center * (j - (SSB_TAPS - 1) / 2) / DEMOD_OUT_RATE;
+        float h = s_ssb_re[j] / sum;
+        s_ssb_re[j] = h * cosf(angle);
+        s_ssb_im[j] = h * sinf(angle) * (mode == DEMOD_USB ? 1.0f : -1.0f);
+    }
+    memset(s_ssb_i, 0, sizeof s_ssb_i);
+    memset(s_ssb_q, 0, sizeof s_ssb_q);
+    s_ssb_pos = 0;
+    s_ssb_dc = 0;
+}
+
+static float ssb_sample(float re, float im)
+{
+    s_ssb_i[s_ssb_pos] = re;
+    s_ssb_q[s_ssb_pos] = im;
+    float a = 0;
+    int p = s_ssb_pos;
+    for (int j = 0; j < SSB_TAPS; j++) {
+        a += s_ssb_i[p] * s_ssb_re[j] - s_ssb_q[p] * s_ssb_im[j];
+        if (--p < 0) p = SSB_TAPS - 1;
+    }
+    if (++s_ssb_pos == SSB_TAPS) s_ssb_pos = 0;
+    s_ssb_dc += 0.001f * (a - s_ssb_dc); /* removes a suppressed-carrier leak / IQ DC */
+    return 2.5f * (a - s_ssb_dc);
+}
 
 bool demod_init(void)
 {
@@ -48,7 +98,17 @@ bool demod_init(void)
     return true;
 }
 
-const char *demod_mode_name(demod_mode_t m) { return m == DEMOD_WFM ? "WFM" : m == DEMOD_NFM ? "NFM" : "AM"; }
+const char *demod_mode_name(demod_mode_t m)
+{
+    switch (m) {
+    case DEMOD_WFM: return "WFM";
+    case DEMOD_NFM: return "NFM";
+    case DEMOD_AM: return "AM";
+    case DEMOD_USB: return "USB";
+    case DEMOD_LSB: return "LSB";
+    default: return "?";
+    }
+}
 demod_mode_t demod_mode(void) { return s_mode; }
 
 void demod_set(demod_mode_t mode, uint32_t bw_hz)
@@ -62,6 +122,11 @@ void demod_set(demod_mode_t mode, uint32_t bw_hz)
         fir_design(&s_w2, 101, 96000, 15000, 19000, 50);   /* 19 kHz pilot out */
         s_fm_gain = 1.0f / (2 * PI_F * 75000 / 480000);    /* 75 kHz deviation = full scale */
         s_ref = WFM_NOISE;
+    } else if (mode == DEMOD_USB || mode == DEMOD_LSB) {
+        float bw = fmaxf(2400.0f, fminf(3600.0f, (float)bw_hz));
+        fir_design(&s_n1, 41, 480000, bw + 1500, 90000, 60);
+        fir_design(&s_n2, 161, 96000, bw + 500, bw + 3500, 60);
+        ssb_design(mode, bw_hz);
     } else {
         float cut = bw_hz * 0.4f;                          /* 25k: 10k, 12.5k: 5k, 8k: 3.2k */
         fir_design(&s_n1, 41, 480000, cut, 96000 - cut, 60);
@@ -89,7 +154,11 @@ void demod_retuned(void)
     if (s_sql) s_open = false;
 }
 
-void demod_set_squelch(int level) { s_sql = level < 0 ? 0 : level > 9 ? 9 : level; }
+void demod_set_squelch(int level)
+{
+    s_sql = level < 0 ? 0 : level > 9 ? 9 : level;
+    if (!s_sql) { s_open = true; s_hang = 0; }
+}
 float demod_level_db(void) { return 10 * log10f(s_pow + 1e-12f); }
 float demod_floor_db(void) { return s_floor; }
 float demod_quality_db(void) { return s_quality; }
@@ -116,7 +185,8 @@ static void level(const float *x, int m, float dt_s)
  * 150 ms tail. */
 static void decide(float msd)
 {
-    if (s_mode == DEMOD_AM) s_quality = demod_level_db() - s_floor;
+    if (s_mode == DEMOD_AM || s_mode == DEMOD_USB || s_mode == DEMOD_LSB)
+        s_quality = demod_level_db() - s_floor;
     else {
         s_msd += (msd - s_msd) * 0.1f;
         s_quality = 10 * log10f(s_ref / (s_msd + 1e-9f));
@@ -251,6 +321,8 @@ static int chunk(const uint8_t *iq, int n, int16_t *out)
                 v = fm_step(re, im, &acc) * s_fm_gain;
                 s_dc += (v - s_dc) * 0.002f;               /* tuning offset out, ~15 Hz */
                 v -= s_dc;
+            } else if (s_mode == DEMOD_USB || s_mode == DEMOD_LSB) {
+                v = ssb_sample(re, im);
             } else {
                 float env = sqrtf(re * re + im * im);
                 if (s_dc == 0 || (s_open && !s_was_open)) s_dc = env;   /* a carrier that just opened the squelch */

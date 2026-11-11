@@ -134,6 +134,8 @@ static const theme_t s_themes[] = {
 #define MAX_HDR_H  (54 + PORT_KEYS)
 #define MAX_AXIS_H 24
 #define MAX_WF_H   LCD_LONG
+#define AUDIO_CTRL_W 208
+#define AUDIO_CTRL_H 72
 
 static const theme_t *T = &s_themes[0];
 static int s_spec_y, s_axis_y, s_wf_y, s_wf_h;
@@ -145,10 +147,13 @@ static button_t s_btn[VIEW_NBTN];
 static int s_ro_x0, s_ro_x1;                 /* room for the frequency readout */
 
 static uint32_t s_rate, s_span, s_pb_hz = 200000;   /* sample rate, shown width, shaded passband */
+static int s_pb_side;                       /* sideband shade: -1 below / +1 above carrier */
+static bool s_fine_tune;
 static int s_hz_px, s_major, s_minor;                  /* Hz per column, axis steps */
 static bool s_auto = true;                             /* dB range follows the noise floor */
 static float s_ref = -20, s_range = 60;                /* manual: top of the scale, height in dB */
 static uint16_t *s_hdr, *s_axis, *s_spec;
+static uint16_t *s_audio_ctrl;
 static uint16_t *s_wf;                       /* 2*wf_h rows, each line stored twice */
 static int s_wf_head;
 static float s_col[LCD_LONG], s_smooth[LCD_LONG], s_peak[LCD_LONG];
@@ -185,8 +190,9 @@ void view_init(uint32_t sample_rate)
     s_hdr = BIG_ALLOC(LCD_LONG * MAX_HDR_H * 2);
     s_axis = BIG_ALLOC(LCD_LONG * MAX_AXIS_H * 2);
     s_spec = BIG_ALLOC(LCD_LONG * MAX_SPEC_H * 2);
+    s_audio_ctrl = BIG_ALLOC(AUDIO_CTRL_W * AUDIO_CTRL_H * 2);
     s_wf = BIG_ALLOC(2 * MAX_WF_H * LCD_LONG * 2);
-    if (!s_hdr || !s_axis || !s_spec || !s_wf) abort();
+    if (!s_hdr || !s_axis || !s_spec || !s_wf || !s_audio_ctrl) abort();
     build_segments();
     view_set_theme(0);
 }
@@ -236,11 +242,60 @@ void view_set_span(uint32_t span)
 }
 
 void view_set_passband(uint32_t hz) { s_pb_hz = hz; }
+void view_set_sideband(int side) { s_pb_side = side < 0 ? -1 : side > 0 ? 1 : 0; }
+void view_set_fine_tune(bool fine) { s_fine_tune = fine; }
 
 void view_set_audio(const char *label, bool live)
 {
     snprintf(s_audio, sizeof s_audio, "%s", label ? label : "");
     s_audio_live = live;
+}
+
+/* Overlay anchored inside the waterfall, away from the top-row signal markers and menu.
+ * The label occupies most of each row; only the two 36x31 keys accept touch. */
+static int audio_x(void) { return LCD_W - 8 - AUDIO_CTRL_W; }
+static int audio_y(void) { return LCD_H - 8 - AUDIO_CTRL_H; }
+
+bool view_audio_overlay_at(int x, int y)
+{
+    return x >= audio_x() && x < audio_x() + AUDIO_CTRL_W &&
+           y >= audio_y() && y < audio_y() + AUDIO_CTRL_H;
+}
+
+int view_audio_button_at(int x, int y)
+{
+    x -= audio_x(); y -= audio_y();
+    if (x < 126 || x >= 202 || y < 4 || y >= 68) return -1;
+    int row = y >= 37 ? 1 : 0;
+    if (y >= 35 && y < 37) return -1;
+    int col = x >= 166 ? 1 : 0;
+    if (x >= 162 && x < 166) return -1;
+    if (x >= (col ? 166 : 126) + 36 || y >= (row ? 37 : 4) + 31) return -1;
+    return row ? (col ? VIEW_SQL_UP : VIEW_SQL_DN) : (col ? VIEW_VOL_UP : VIEW_VOL_DN);
+}
+
+void view_audio_controls(int vol, int sql, int pressed)
+{
+    rpi_canvas_t c = {s_audio_ctrl, AUDIO_CTRL_W, AUDIO_CTRL_H};
+    rpi_cv_rrect(&c, 0, 0, AUDIO_CTRL_W, AUDIO_CTRL_H, 5, T->plate);
+    for (int row = 0; row < 2; row++) {
+        int y = 4 + row * 33;
+        char text[20];
+        if (!row) snprintf(text, sizeof text, "VOL %d", vol);
+        else if (sql) snprintf(text, sizeof text, "SQL %d", sql);
+        else snprintf(text, sizeof text, "SQL OPEN");
+        rpi_cv_text(&c, 8, y + 8, text, T->txt, 1);
+        for (int col = 0; col < 2; col++) {
+            int id = (row ? VIEW_SQL_DN : VIEW_VOL_DN) + col;
+            int bx = 126 + col * 40;
+            bool on = pressed == id;
+            rpi_cv_rrect(&c, bx, y, 36, 31, T->hdr == HDR_PORTAPACK ? 0 : 4, on ? T->btn_on : T->btn);
+            const char *sign = col ? "+" : "-";
+            rpi_cv_text(&c, bx + (36 - rpi_cv_text_w(sign, 1)) / 2, y + 7,
+                        sign, on ? btn_text(true) : T->txt, 1);
+        }
+    }
+    rpi_lcd_blit(audio_x(), audio_y(), AUDIO_CTRL_W, AUDIO_CTRL_H, s_audio_ctrl);
 }
 
 void view_set_range(bool auto_range, float ref_db, float range_db)
@@ -480,28 +535,39 @@ void view_header(uint32_t freq, const char *gain, int pressed)
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(gain, 1)) / 2, ty + 15, gain,
                         on || T->hdr == HDR_VINTAGE ? btn_text(on) : T->dim, 1);
         } else {
-            rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(b->label, 1)) / 2, b->y + (b->h - 16) / 2,
-                        b->label, btn_text(on), 1);
+            static const char *fine[] = {"-1k", "-100", "+100", "+1k"};
+            const char *label = s_fine_tune && i < 4 ? fine[i] : b->label;
+            rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(label, 1)) / 2, b->y + (b->h - 16) / 2,
+                        label, btn_text(on), 1);
         }
     }
 
     int x0 = s_ro_x0, x1 = s_ro_x1;
     int mhz_w = 4 + rpi_cv_text_w("MHz", 1);
     if (T->hdr == HDR_PORTAPACK) {           /* plain 16x32 digits, zero padded */
-        char f[12];
-        snprintf(f, sizeof f, "%4" PRIu32 ".%03" PRIu32, freq / 1000000 % 10000, (freq / 1000) % 1000);
+        char f[16];
+        if (s_fine_tune)
+            snprintf(f, sizeof f, "%4" PRIu32 ".%03" PRIu32 "%01" PRIu32,
+                     freq / 1000000 % 10000, freq / 1000 % 1000, freq / 100 % 10);
+        else snprintf(f, sizeof f, "%4" PRIu32 ".%03" PRIu32, freq / 1000000 % 10000, freq / 1000 % 1000);
         int w = rpi_cv_text_w(f, 2) + mhz_w, x = x0 + (x1 - x0 - w) / 2;
         x = rpi_cv_text(&c, x, T->btn_y, f, T->freq, 2);
         rpi_cv_text(&c, x + 4, T->btn_y + 14, "MHz", T->dim, 1);
     } else {
         int y = T->btn_y + (T->btn_h - SEG_H) / 2;
-        int x = x0 + (x1 - x0 - SEG_FREQ_W - mhz_w) / 2;
+        int frac_w = s_fine_tune ? 2 + rpi_cv_text_w("0", 1) : 0;
+        int x = x0 + (x1 - x0 - SEG_FREQ_W - frac_w - mhz_w) / 2;
         if (T->hdr == HDR_VINTAGE) {         /* dark glass window */
-            outline(&c, x - 6, y - 3, SEG_FREQ_W + mhz_w + 12, SEG_H + 6, 4, T->btn_edge, RGB565(14, 8, 3));
-            rpi_cv_fill(&c, x - 3, y - 1, SEG_FREQ_W + mhz_w + 6, 1, RGB565(46, 30, 16));
+            outline(&c, x - 6, y - 3, SEG_FREQ_W + frac_w + mhz_w + 12, SEG_H + 6, 4, T->btn_edge, RGB565(14, 8, 3));
+            rpi_cv_fill(&c, x - 3, y - 1, SEG_FREQ_W + frac_w + mhz_w + 6, 1, RGB565(46, 30, 16));
         }
         bool glow = T->hdr == HDR_PHOSPHOR || T->hdr == HDR_VINTAGE || T->hdr == HDR_NEON;
         x += seg_freq(&c, x, y, freq, T->hdr == HDR_PHOSPHOR ? 16 : 22, glow);
+        if (s_fine_tune) {
+            char tenth[2] = {(char)('0' + freq / 100 % 10), 0};
+            rpi_cv_text(&c, x + 2, y + 8, tenth, T->freq, 1);
+            x += frac_w;
+        }
         rpi_cv_text(&c, x + 2, y + SEG_H - 15, "MHz", T->dim, 1);
     }
     rpi_lcd_blit(0, 0, LCD_W, s_hdr_h, s_hdr);
@@ -668,9 +734,10 @@ static void render_spectrum(uint32_t fc)
     float lo, hi, wlo, whi;
     scale(&lo, &hi, &wlo, &whi);
     const float px_db = (H - 1) / (hi - lo);
-    int half = (int)(s_pb_hz / 2 / s_hz_px);
+    int half = (int)(s_pb_hz / (s_pb_side ? 1 : 2) / s_hz_px);
     if (half > LCD_W / 2 - 1) half = LCD_W / 2 - 1;
-    const int pb0 = LCD_W / 2 - half, pb1 = LCD_W / 2 + half;
+    const int pb0 = LCD_W / 2 - (s_pb_side > 0 ? 0 : half);
+    const int pb1 = LCD_W / 2 + (s_pb_side < 0 ? 0 : half);
     rpi_canvas_t c = {s_spec, LCD_W, H};
 
     for (int y = 0; y < H; y++) {
