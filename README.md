@@ -68,7 +68,24 @@ starting points from 3.95 to 21.6 MHz, and CB channels 1/9/19/40 in AM plus
 channel 38 in USB and LSB. Presets tune a **receive-only** frequency and choose
 an audio demodulator/filter; they do not guarantee a station or legal authority
 to transmit. The Blog V4's built-in HF upconverter remains in **TUNER** mode.
-ISM presets are **not** packet decoders; OOK/FSK devices need separate decoding.
+ISM presets are **not** packet decoders. **MENU → SCAN → SENSORS** is a separate,
+experimental foreground decoder at 433.92 MHz for **Fine Offset WH2** weather
+and **Steelmate TP-S15-family** TPMS packets only. It uses the existing RTL-SDR
+USB/IQ ring; audio and waterfall pause while it listens. EXIT restores the
+previous frequency and audio. The screen shows decoded IDs/readings, a decoder
+load estimate and dropped-IQ bytes; any dropped ring span resets both packet
+parsers. Displayed packet rows expire after 60 seconds, while counts remain
+session totals. This does **not** decode arbitrary TPMS, weather sensors, or ISM traffic.
+Known recorded CU8 examples pass host tests at 250 kS/s. When replayed at
+2.4 MS/s, WH2 decodes and Steelmate decodes **two of three** repeated packets;
+the third fails a strict preamble check. Live Blog V4 sensitivity, USB
+throughput, false-positive behavior and decoding of your own devices have
+**not been verified on hardware**. Do not
+rely on this experimental TPMS screen for vehicle safety decisions.
+
+Mute is currently transient and volume/squelch use a delayed settings save.
+Restoring all three after an immediate power-off is a separate unchecked
+[roadmap task](ROADMAP.md); do not assume that behavior is implemented here.
 
 ## Hardware status
 

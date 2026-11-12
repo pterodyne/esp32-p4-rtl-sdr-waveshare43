@@ -42,6 +42,17 @@ and 915 MHz, and adds AM broadcast (600/1000/1600 kHz), ten shortwave AM
 starting points (3.95–21.6 MHz) and CB AM (channels 1/9/19/40), plus
 channel 38 USB/LSB. These are tuning/filter templates, not guaranteed active
 stations or packet decoders; the V4 HF path remains TUNER/upconverter.
+**MENU → SCAN → SENSORS** is an experimental foreground 433.92 MHz decoder for
+named Fine Offset WH2 weather and Steelmate TP-S15-family TPMS packets only.
+It uses the same USB driver and CU8 IQ ring, pauses audio/waterfall, shows
+readings and dropped bytes, and restores the previous frequency on EXIT. The
+recorded IQ examples pass host tests at their 250 kS/s source rate. When
+replayed at this firmware's 2.4 MS/s rate, WH2 decodes and Steelmate decodes
+two of three repeated packets (one fails the strict preamble check). There is
+no Blog V4 live-capture or on-board throughput verification yet. This is not
+generic rtl_433 support and
+must not be relied on for vehicle safety. See [ROADMAP.md](ROADMAP.md) for
+later formats and the separate mute/volume/squelch power-cycle persistence task.
 SSB currently has a fixed audio gain rather than speech AGC; set SQL to OPEN
 (0) because its power-based squelch can mute an already-present voice signal.
 

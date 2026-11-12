@@ -35,6 +35,10 @@
 #include "sdcard.h"
 #include "sdlog.h"
 #include "scan_view.h"
+#include "sensor_view.h"
+#include "sensor_event_age.h"
+#include "settings_save_due.h"
+#include "sensor_pipeline.h"
 #include "radio_scan.h"
 #include "audio.h"
 #include "ui_audio_policy.h"
@@ -50,6 +54,7 @@ static const char *TAG = "ui";
 #define PANEL_FRAME_US 100000
 
 static uint8_t *s_iq;
+static sensor_pipeline_t s_sensor_pipeline;
 static float s_db[NFFT_MAX];
 static ctl_t s_ctl = {.range_auto = true, .ref_db = -20, .range_db = 60, .band = -1,
                       .gain_label = sdr_gain_label, .gain_tenths = sdr_gain_tenths};
@@ -61,6 +66,7 @@ static int s_av_action;                     /* last ADS-B screen key fired */
 static bool s_scan;                         /* in a Wi-Fi / BLE scanner */
 static int s_scan_req = -1;                 /* SV_WIFI / SV_BLE asked for */
 static int s_sv_action;                     /* last scanner key fired */
+static bool s_sensor, s_sensor_req, s_sensor_exit; /* same SDR ring, foreground 433.92 MHz */
 static bool s_mscan;                        /* hopping through the channel memories */
 static int s_mscan_i = -1;                  /* slot tuned by the scan */
 static int64_t s_hop_at, s_dwell_until;
@@ -78,9 +84,9 @@ static int s_tune_step = TUNE_STEP_DEFAULT;
 
 static void settings_changed(void) { s_save_at = esp_timer_get_time() + 3000000; }
 
-static void settings_maybe_save(void)
+static void settings_maybe_save(bool force)
 {
-    if (!s_save_at || esp_timer_get_time() < s_save_at) return;
+    if (!settings_save_due(s_save_at, esp_timer_get_time(), force)) return;
     s_save_at = 0;
     nvs_set_u32(s_nvs, "freq", sdr_freq());
     nvs_set_i32(s_nvs, "gaint", sdr_gain_tenths(sdr_gain_index()));
@@ -424,6 +430,11 @@ static void panel_event(int ev, int x, int y, int64_t now)
         s_scan_req = ch & CTL_WIFI ? SV_WIFI : SV_BLE;
         return;
     }
+    if (ch & CTL_SENSOR) {
+        panel_show(false);
+        s_sensor_req = true;
+        return;
+    }
     if (ch & CTL_GAIN) {
         sdr_set_gain_index(s_ctl.gain_idx);
         draw_header(-1);
@@ -493,7 +504,7 @@ static void poll_touch(const touch_cal_t *cal)
 {
     static bool down;
     static int n, x, y;
-    static int where;                       /* 0 header, 1 panel, 2 tuning, 3 ADS-B, 4 scanner, 5 none, 6 audio, 7 mode, 8 zoom */
+    static int where;                       /* 0 header, 1 panel, 2 tuning, 3 ADS-B, 4 scanner, 5 none, 6 audio, 7 mode, 8 zoom, 9 sensors */
     static int act = -1;
     static int64_t next_repeat;
     uint16_t rx, ry, rz;
@@ -503,6 +514,7 @@ static void poll_touch(const touch_cal_t *cal)
         if (down && n > 0) {                /* release */
             if (where == 3) s_av_action = adsb_view_touch(AV_RELEASE, x, y);
             else if (where == 4) s_sv_action = scan_view_touch(SV_RELEASE, x, y);
+            else if (where == 9) s_sensor_exit = sensor_view_touch(SENSOR_RELEASE, x, y);
             else if (where == 0 && act >= 0) draw_header(-1);
             else if (where == 6) { s_audio_pressed = -1; view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, -1); }
             else if (where == 7) {
@@ -543,6 +555,9 @@ static void poll_touch(const touch_cal_t *cal)
         } else if (s_scan) {
             where = 4;
             scan_view_touch(SV_PRESS, x, y);
+        } else if (s_sensor) {
+            where = 9;
+            sensor_view_touch(SENSOR_PRESS, x, y);
         } else if (y < view_tune_y()) {
             where = 0;
             act = view_button_at(x, y);
@@ -575,6 +590,7 @@ static void poll_touch(const touch_cal_t *cal)
     y = (y + py) / 2;
     if (where == 3) adsb_view_touch(AV_MOVE, x, y);
     else if (where == 4) scan_view_touch(SV_MOVE, x, y);
+    else if (where == 9) sensor_view_touch(SENSOR_MOVE, x, y);
     else if (where == 1) panel_event(PANEL_MOVE, x, y, now);
     else if (where == 7) {
         int hot = view_mode_button_at(x, y) == act ? act : -1;
@@ -771,6 +787,108 @@ static void adsb_mode(const touch_cal_t *cal)
     view_axis(sdr_freq());
 }
 
+/* Opt-in foreground decoder: reuse this USB owner's 2.4 MS/s CU8 IQ ring.
+ * The waterfall and audio reader pause, but the USB task and its driver stay
+ * untouched. Do not report a named protocol as support for other sensors. */
+static void sensor_mode(const touch_cal_t *cal)
+{
+    if (!sdr_streaming()) return; /* the outer loop owns stream recovery */
+    if (sdr_sample_rate() != SDR_SAMPLE_RATE || sdr_direct_mode() != 0 ||
+        !sensor_pipeline_init(&s_sensor_pipeline, SDR_SAMPLE_RATE)) {
+        ESP_LOGW(TAG, "sensors need the 2.4 MS/s tuner IQ path");
+        return;
+    }
+    const uint32_t previous_freq = sdr_freq();
+    settings_maybe_save(true); /* never persist the sensor center as receiver frequency */
+    ESP_LOGI(TAG, "WH2 / Steelmate foreground decoder: 433.92 MHz");
+    audio_pause(true);
+    if (!audio_wait_paused(250)) {
+        audio_pause(false);
+        ESP_LOGW(TAG, "audio task did not pause; sensor tune cancelled");
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(40)); /* let the codec's queued I2S DMA finish */
+    sdr_set_freq(433920000);
+    vTaskDelay(pdMS_TO_TICKS(20)); /* discard the tuner transition and queued old IQ */
+    uint64_t pos = sdr_total_bytes(), dropped = 0;
+    sensor_view_info_t info = {.streaming = true};
+    uint64_t seen_us[SENSOR_VIEW_ROWS] = {0};
+    sensor_view_open();
+    s_sensor = true;
+    s_sensor_exit = false;
+    sensor_view_draw(&info);
+    int64_t t_touch = 0, t_draw = 0, t_load = esp_timer_get_time(), t_yield = t_load, busy = 0;
+    while (sdr_streaming() && !s_sensor_exit) {
+        int64_t t0 = esp_timer_get_time();
+        uint64_t dropped_before = dropped;
+        size_t n = sdr_ring_read(s_iq, &pos, 32 * 1024, &dropped);
+        if (dropped != dropped_before) sensor_pipeline_reset(&s_sensor_pipeline);
+        if (n) {
+            sensor_packet_t found[8];
+            size_t count = sensor_pipeline_feed(&s_sensor_pipeline, s_iq, n, found, 8);
+            for (size_t j = 0; j < count; j++) {
+                char text[SENSOR_VIEW_LINE];
+                if (found[j].type == SENSOR_WH2) {
+                    int v = found[j].weather.temperature_tenths_c;
+                    snprintf(text, sizeof text, "WH2 %02X %s%d.%d C %u%%", found[j].weather.id,
+                             v < 0 ? "-" : "", abs(v) / 10, abs(v) % 10, found[j].weather.humidity);
+                    info.wh2++;
+                } else {
+                    const tpms_steelmate_packet_t *p = &found[j].tpms;
+                    snprintf(text, sizeof text, "TPMS %04X %.1f kPa %d C %s", p->id,
+                             p->pressure_kpa, p->temperature_c,
+                             p->alarm == TPMS_STEELMATE_FAST_LEAK ? "FAST LEAK" :
+                             p->alarm == TPMS_STEELMATE_SLOW_LEAK ? "SLOW LEAK" : "");
+                    info.tpms++;
+                }
+                memmove(info.event[1], info.event[0],
+                        (SENSOR_VIEW_ROWS - 1) * SENSOR_VIEW_LINE);
+                memmove(seen_us + 1, seen_us, (SENSOR_VIEW_ROWS - 1) * sizeof seen_us[0]);
+                seen_us[0] = (uint64_t)esp_timer_get_time();
+                snprintf(info.event[0], SENSOR_VIEW_LINE, "%s", text);
+                if (info.rows < SENSOR_VIEW_ROWS) info.rows++;
+            }
+            busy += esp_timer_get_time() - t0;
+        }
+        int64_t now = esp_timer_get_time();
+        while (info.rows && sensor_event_expired(seen_us[info.rows - 1], (uint64_t)now)) {
+            info.rows--;
+            info.event[info.rows][0] = 0;
+        }
+        if (n < 32 * 1024 || now - t_yield > 50000) {
+            vTaskDelay(1); /* IDLE1 and the USB task must get scheduled */
+            t_yield = now;
+        }
+        if (now - t_touch > 20000) { t_touch = now; poll_touch(cal); }
+        if (now - t_load > 5000000) {
+            int64_t elapsed = now - t_load;
+            info.load_percent = (int)(100 * busy / elapsed);
+            info.dropped_bytes = dropped;
+            ESP_LOGI(TAG, "sensors WH2 %u Steelmate %u, decode %d%%, dropped %" PRIu64 " B",
+                     info.wh2, info.tpms, info.load_percent, dropped);
+            t_load = now;
+            busy = 0;
+        }
+        if (now - t_draw > 250000) {
+            t_draw = now;
+            info.dropped_bytes = dropped;
+            sensor_view_draw(&info);
+        }
+    }
+    s_sensor = false;
+    ESP_LOGI(TAG, "leaving sensor mode: WH2 %u, Steelmate %u, dropped %" PRIu64 " B",
+             info.wh2, info.tpms, dropped);
+    sdr_set_freq(previous_freq);
+    vTaskDelay(pdMS_TO_TICKS(40)); /* resumed reader starts 20 ms behind live IQ */
+    audio_retuned();
+    vTaskDelay(pdMS_TO_TICKS(20)); /* retune request is processed while paused */
+    audio_pause(false);
+    view_set_theme(view_theme());
+    apply_view();
+    draw_header(-1);
+    view_axis(sdr_freq());
+}
+
 /* ----------------------------------------------------------------- Wi-Fi / BLE -- */
 
 static void mac_str(char *out, const uint8_t *m)
@@ -881,6 +999,7 @@ void ui_run(const touch_cal_t *cal)
     panel_init();
     adsb_view_init();
     scan_view_init();
+    sensor_view_init();
     nvs_open("sdr", NVS_READWRITE, &s_nvs);
     view_set_theme(nvs_int("theme", 0));
     s_ctl.range_auto = nvs_int("rauto", 1);
@@ -923,6 +1042,10 @@ void ui_run(const touch_cal_t *cal)
             int k = s_scan_req;
             s_scan_req = -1;
             scan_mode(cal, k);
+        }
+        if (s_sensor_req) {
+            s_sensor_req = false;
+            sensor_mode(cal);
         }
         if (!sdr_streaming()) {
             static int restarts;
@@ -975,7 +1098,7 @@ void ui_run(const touch_cal_t *cal)
             poll_touch(cal);
         }
         if (s_mscan) mscan_step();
-        settings_maybe_save();
+        settings_maybe_save(false);
         vTaskDelay(1);                          /* let IDLE1 run (task watchdog) */
         frames++;
         if (t2 - t_log > 5000000) {

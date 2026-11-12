@@ -9,7 +9,7 @@
  *   RANGE:  top -/+, span -/+, AUTO
  *   ZOOM: four horizontal FFT spans; AUDIO: six modes, volume and squelch -/+
  *   RF INPUT: Bias-T OFF/ON, tuner / direct ADC I / direct ADC Q (V4 I/Q disabled)
- *   BAND: paged RX presets incl. AM/SW/CB and North American ISM;  SCAN: WIFI, BLE, SAVE, MEMORY
+ *   BAND: paged RX presets incl. AM/SW/CB and North American ISM;  SCAN: WIFI, BLE, SAVE, MEMORY, SENSORS
  *   MEMORY: eight channel slots, tap one to tune it, SCAN to hop through them;  SAVE: tap a slot
  *   to store what's tuned now there
  * In portrait the 4-wide grids stand 2 wide.
@@ -47,7 +47,8 @@ enum { CTL_GAIN = 1, CTL_RANGE = 2, CTL_ZOOM = 4, CTL_BW = 8, CTL_BAND = 16, CTL
        CTL_AUDIO = 1024,                     /* volume or squelch */
        CTL_MEM_SAVE = 2048,                  /* c->freq and c->bw stored in slot c->mem */
        CTL_MEM_TUNE = 4096,                  /* tune slot c->mem (the panel stays as is) */
-       CTL_MEM_SCAN = 8192, CTL_BIAS = 16384, CTL_DIRECT = 32768 };
+       CTL_MEM_SCAN = 8192, CTL_BIAS = 16384, CTL_DIRECT = 32768,
+       CTL_SENSOR = 65536 };                /* foreground WH2 + Steelmate at 433.92 MHz */
 enum { PANEL_PRESS, PANEL_MOVE, PANEL_RELEASE };
 
 void panel_init(void);

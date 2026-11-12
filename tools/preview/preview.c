@@ -18,6 +18,7 @@
 #include "adsb_view.h"
 #include "amap.h"
 #include "scan_view.h"
+#include "sensor_view.h"
 
 #define RATE 2400000
 #define NAVG 24
@@ -737,8 +738,77 @@ static void test_theme_header_disabled(void)
     puts("header frequency inert; Controls remains accessible across looks and orientations");
 }
 
+static void test_sensor_entry(void)
+{
+    view_init(RATE);
+    panel_init();
+    sensor_view_init();
+    for (int portrait = 0; portrait < 2; portrait++) {
+        rpi_lcd_set_portrait(portrait != 0);
+        view_set_theme(0);
+        ctl_t ct = {.gain_idx = 0, .gain_n = 30, .gain_label = gain_label,
+                    .gain_tenths = gain_tenths};
+        panel_open(&ct);
+        int cols = portrait ? 2 : 4, rows = portrait ? 5 : 3;
+        int cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
+        int ch = (LCD_H - view_tune_y() - 12 - 6 * (rows - 1)) / rows;
+        int x = 6 + (5 % cols) * (cw + 6) + cw / 2;
+        int y = view_tune_y() + 6 + (5 / cols) * (ch + 6) + ch / 2;
+        panel_touch(&ct, PANEL_PRESS, x, y, 0);
+        panel_touch(&ct, PANEL_RELEASE, x, y, 0); /* Controls > SCAN */
+        int bh = LCD_H - view_tune_y() - 62;
+        cw = (LCD_W - 18) / 2;
+        ch = (bh - 12) / 3;
+        x = 6 + cw / 2;
+        y = view_tune_y() + 56 + 2 * (ch + 6) + ch / 2;
+        panel_touch(&ct, PANEL_PRESS, x, y, 0);
+        assert(panel_touch(&ct, PANEL_RELEASE, x, y, 0) & CTL_SENSOR);
+        sensor_view_open();
+        sensor_view_info_t info = {.wh2 = 1, .tpms = 2, .streaming = true,
+                                   .rows = 2, .event = {"WH2  D1 24.6 C 33%", "TPMS 1A4E 259.4 kPa"}};
+        sensor_view_info_t blank = {.wh2 = 1, .tpms = 2, .streaming = true};
+        sensor_view_draw(&blank);
+        int second_row = (portrait ? 96 + 60 : 50 + 38) + 36;
+        uint32_t blank_crc = crc32(0, (const Bytef *)(fb + second_row * LCD_W),
+                                   LCD_W * 34 * sizeof fb[0]);
+        sensor_view_draw(&info);
+        assert(crc32(0, (const Bytef *)(fb + second_row * LCD_W),
+                     LCD_W * 34 * sizeof fb[0]) != blank_crc);
+        int unchanged = s_blit_count;
+        sensor_view_draw(&info);
+        assert(s_blit_count == unchanged); /* live IQ without updates must not blit */
+        info.dropped_bytes = 1024;
+        sensor_view_draw(&info);
+        assert(s_blit_count > unchanged && s_last_h < LCD_H); /* bounded SPI transfer */
+        sensor_view_draw(&blank); /* a 60-second-old last event is removed */
+        assert(crc32(0, (const Bytef *)(fb + second_row * LCD_W),
+                     LCD_W * 34 * sizeof fb[0]) == blank_crc);
+        sensor_view_draw(&info);
+        int ex = LCD_W - 60, ey = portrait ? 68 : 25;
+        int before = s_blit_count;
+        assert(!sensor_view_touch(SENSOR_PRESS, ex, ey));
+        assert(s_blit_count > before); /* EXIT visibly highlights when pressed */
+        assert(!sensor_view_touch(SENSOR_RELEASE, 12, LCD_H - 12));
+        sensor_view_touch(SENSOR_PRESS, ex, ey);
+        assert(sensor_view_touch(SENSOR_RELEASE, ex, ey));
+    }
+    puts("SCAN > SENSORS entry touch hits in landscape and portrait");
+}
+
 int main(int argc, char **argv)
 {
+    if (argc > 2 && !strcmp(argv[1], "--sensor-snapshot")) {
+        rpi_lcd_set_portrait(argc > 3 && !strcmp(argv[3], "--portrait"));
+        view_init(RATE);
+        view_set_theme(0);
+        sensor_view_init();
+        sensor_view_open();
+        sensor_view_info_t in = {.wh2 = 1, .tpms = 3, .streaming = true,
+                                 .rows = 2, .event = {"TPMS 1A4E 259.4 kPa 25 C", "WH2 D1 24.6 C 33%"}};
+        sensor_view_draw(&in);
+        write_png(argv[2], fb, LCD_W, LCD_H);
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "--test-bands")) { test_am_sw_cb_pages(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-theme")) { test_theme_header_disabled(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-audio")) { test_audio_controls(); return 0; }
@@ -746,6 +816,7 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "--test-footer-recovery")) { test_footer_stream_recovery(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-rf")) { test_rf_settings(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-ism")) { test_ism_bands(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "--test-sensors")) { test_sensor_entry(); return 0; }
     if (argc > 2 && !strcmp(argv[1], "--audio-snapshot")) {
         static float db[1024];
         view_init(RATE);

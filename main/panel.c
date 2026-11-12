@@ -84,7 +84,7 @@ enum {
     K_VOL_DN = K_LOOK + LOOKS, K_VOL_UP, K_SQL_DN, K_SQL_UP,
     K_MEMORY, K_SAVE, K_MSCAN, K_SLOT,      /* K_SLOT + 0..7: memory slots */
     K_DIRECT = K_SLOT + PANEL_MEMS, K_BIAS_OFF = K_DIRECT + 3, K_BIAS_ON,
-    K_PAGE_PREV, K_PAGE_NEXT,
+    K_PAGE_PREV, K_PAGE_NEXT, K_SENSOR,
 };
 
 typedef struct {
@@ -160,7 +160,7 @@ static void build(const ctl_t *c)
         else snprintf(v, sizeof v, "%s, off", s_bw_mode[c->bw]);
         grid(GAP, y, w, h, c4, menu_rows, 3, K_TILE + P_BW, "AUDIO", v)->big = true;
         grid(GAP, y, w, h, c4, menu_rows, 4, K_TILE + P_BAND, "BAND", c->band >= 0 ? s_band[c->band].name : "presets")->big = true;
-        grid(GAP, y, w, h, c4, menu_rows, 5, K_TILE + P_SCAN, "SCAN", "Wi-Fi, BLE, memory")->big = true;
+        grid(GAP, y, w, h, c4, menu_rows, 5, K_TILE + P_SCAN, "SCAN", "Wi-Fi, BLE, sensors")->big = true;
         grid(GAP, y, w, h, c4, menu_rows, 6, K_TILE + P_LOOK, "LOOK", view_theme_name(view_theme()))->big = true;
         grid(GAP, y, w, h, c4, menu_rows, 7, K_TILE + P_RF, "RF INPUT",
              c->bias_error ? (c->bias_forced ? "BIAS ? EEPROM ON" : "BIAS ? RETRY OFF")
@@ -253,11 +253,12 @@ static void build(const ctl_t *c)
             K_PAGE_NEXT, "NEXT >", NULL)->disabled = last == PANEL_BANDS;
         break;
     }
-    case P_SCAN:                             /* Wi-Fi and BLE run on the module's ESP32-C6 */
-        grid(GAP, by, bw, bh, 2, 2, 0, K_WIFI, "WIFI", p ? "networks" : "access points, channels")->big = true;
-        grid(GAP, by, bw, bh, 2, 2, 1, K_BLE, "BLE", "nearby devices")->big = true;
-        grid(GAP, by, bw, bh, 2, 2, 2, K_SAVE, "SAVE", "keep this channel")->big = true;
-        grid(GAP, by, bw, bh, 2, 2, 3, K_MEMORY, "MEMORY", "tune or scan")->big = true;
+    case P_SCAN:                             /* C6 scans and a foreground RTL sensor decoder */
+        grid(GAP, by, bw, bh, 2, 3, 0, K_WIFI, "WIFI", p ? "networks" : "access points, channels")->big = true;
+        grid(GAP, by, bw, bh, 2, 3, 1, K_BLE, "BLE", "nearby devices")->big = true;
+        grid(GAP, by, bw, bh, 2, 3, 2, K_SAVE, "SAVE", "keep this channel")->big = true;
+        grid(GAP, by, bw, bh, 2, 3, 3, K_MEMORY, "MEMORY", "tune or scan")->big = true;
+        grid(GAP, by, bw, bh, 2, 3, 4, K_SENSOR, "SENSORS", "WH2 / Steelmate")->big = true;
         break;
     case P_MEM:
     case P_SAVE:
@@ -407,6 +408,7 @@ static int act(ctl_t *c, int id, bool *page_change)
     if (id == K_DONE) return CTL_CLOSE;
     if (id == K_WIFI) return CTL_WIFI;
     if (id == K_BLE) return CTL_BLE;
+    if (id == K_SENSOR) return CTL_SENSOR;
     if (id == K_TURN) return CTL_TURN;
     if (id == K_PAGE_PREV || id == K_PAGE_NEXT) {
         int page_size = LCD_PORTRAIT ? 10 : 12;
