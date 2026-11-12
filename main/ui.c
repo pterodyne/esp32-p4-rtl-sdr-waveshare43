@@ -3,7 +3,7 @@
  * Tap the spectrum or waterfall to tune there. Hold a step button to repeat. Tap the frequency
  * readout is display-only; pick a look on the LOOK page. Tap MENU (top right, gain shown under it) for Controls (gain, dB range, zoom,
  * audio: filter and mode, volume, squelch; bands). Touch is sampled three times a frame; menu keys and tuning act when the finger lifts. Everything is kept in NVS namespace "sdr": freq, gaint (tenths of a dB,
- * -1 = AGC), theme, rauto, ref, rspan, zoom, bw, vol, sql, mem (blob: the channel memories); logn is the SD log session (sdlog.c). */
+ * -1 = AGC), theme, rauto, ref, rspan, zoom, bw, audctl (versioned audio-state blob), mem (channel memories); logn is the SD log session (sdlog.c). Legacy vol/sql keys are read when audctl is absent. */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +16,8 @@
 #include "esp_heap_caps.h"
 #include "nvs.h"
 #include "theme_store.h"
+#include "audio_settings_store.h"
+#include "audio_save_pending.h"
 #include "tune_step.h"
 #include "rpi_lcd.h"
 #include "rpi_text.h"
@@ -60,7 +62,7 @@ static ctl_t s_ctl = {.range_auto = true, .ref_db = -20, .range_db = 60, .band =
                       .gain_label = sdr_gain_label, .gain_tenths = sdr_gain_tenths};
 static bool s_panel;                        /* Controls panel is up */
 static int s_audio_pressed = -1;            /* compact waterfall control held under the finger */
-static bool s_muted;                        /* temporary speaker mute; saved VOL is unchanged */
+static bool s_muted;                        /* saved independently from volume zero */
 static bool s_adsb, s_adsb_req;             /* in ADS-B mode / asked for it */
 static int s_av_action;                     /* last ADS-B screen key fired */
 static bool s_scan;                         /* in a Wi-Fi / BLE scanner */
@@ -76,8 +78,10 @@ static void draw_header(int pressed) { view_header(sdr_freq(), sdr_gain_label(sd
 /* ---------------------------------------------------------------------- settings -- */
 
 static nvs_handle_t s_nvs;
+static bool s_nvs_ready;
 static int64_t s_save_at;
 static bool s_theme_save_failed;
+static audio_save_pending_t s_audio_pending;
 #ifdef CONFIG_SDR_WAVESHARE_43
 static int s_tune_step = TUNE_STEP_DEFAULT;
 #endif
@@ -99,8 +103,6 @@ static void settings_maybe_save(bool force)
     nvs_set_i32(s_nvs, "rspan", s_ctl.range_db);
     nvs_set_i32(s_nvs, "zoom", s_ctl.zoom);
     nvs_set_i32(s_nvs, "bw", s_ctl.bw);
-    nvs_set_i32(s_nvs, "vol", s_ctl.vol);
-    nvs_set_i32(s_nvs, "sql", s_ctl.sql);
     nvs_set_i32(s_nvs, "direct", s_ctl.direct); /* bias tee deliberately not persisted */
     nvs_commit(s_nvs);
     ESP_LOGI(TAG, "saved %" PRIu32 " Hz, gain %s, zoom %d, bw %d", sdr_freq(),
@@ -109,9 +111,35 @@ static void settings_maybe_save(bool force)
 
 static int32_t nvs_int(const char *key, int32_t def)
 {
+    if (!s_nvs_ready) return def;
     int32_t v = def;
     nvs_get_i32(s_nvs, key, &v);
     return v;
+}
+
+/* All flash work stays on the UI task. Retry the latest desired state after a
+ * failed set/commit; a new tap overrides the retry delay immediately. */
+static void audio_settings_try_save(bool force)
+{
+    int64_t now = esp_timer_get_time();
+    if (!s_audio_pending.dirty || (!force && !audio_save_pending_due(&s_audio_pending, now))) return;
+    esp_err_t err = ESP_OK;
+    if (!s_nvs_ready) {
+        err = nvs_open("sdr", NVS_READWRITE, &s_nvs);
+        s_nvs_ready = err == ESP_OK;
+    }
+    if (err == ESP_OK) {
+        audio_settings_t desired = {.volume = s_ctl.vol, .squelch = s_ctl.sql, .muted = s_muted};
+        err = audio_settings_store_save(s_nvs, &desired);
+    }
+    audio_save_pending_result(&s_audio_pending, err == ESP_OK, now);
+    if (err != ESP_OK) ESP_LOGW(TAG, "audio settings save failed (%s); retry in 5 s", esp_err_to_name(err));
+}
+
+static void audio_settings_changed(void)
+{
+    audio_save_pending_mark(&s_audio_pending);
+    audio_settings_try_save(false); /* commit before a fast power-off */
 }
 
 static bool fine_frequency_visible(void)
@@ -219,7 +247,7 @@ static void mscan_start(void)
     if (!s_ctl.sql) {                        /* an open squelch would never let it move on */
         s_ctl.sql = 3;
         apply_audio();
-        settings_changed();
+        audio_settings_changed();
         ESP_LOGI(TAG, "memory scan: squelch was open, set to 3");
     }
     s_mscan = true;
@@ -339,6 +367,7 @@ static void do_action(int act)
         view_set_mute(s_muted);
         show_audio();
         view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, s_audio_pressed);
+        audio_settings_changed();
         return;
     }
     if (act == VIEW_ZOOM_DN || act == VIEW_ZOOM_UP) {
@@ -374,8 +403,8 @@ static void do_action(int act)
         if (act == VIEW_SQL_DN && s_ctl.sql > 0) s_ctl.sql--;
         if (act == VIEW_SQL_UP && s_ctl.sql < 9) s_ctl.sql++;
         if (act <= VIEW_VOL_UP) {
-            if (prev != s_ctl.vol) { audio_set_volume(s_ctl.vol); settings_changed(); }
-        } else if (prev != s_ctl.sql) { audio_set_squelch(s_ctl.sql); settings_changed(); }
+            if (prev != s_ctl.vol) { audio_set_volume(s_ctl.vol); audio_settings_changed(); }
+        } else if (prev != s_ctl.sql) { audio_set_squelch(s_ctl.sql); audio_settings_changed(); }
         view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, s_audio_pressed);
         return;
     }
@@ -494,7 +523,8 @@ static void panel_event(int ev, int x, int y, int64_t now)
     if (ch & (CTL_RANGE | CTL_ZOOM | CTL_BW | CTL_BAND)) apply_view();
     if (ch & CTL_BW) draw_header(-1);
     if (ch & (CTL_BW | CTL_BAND | CTL_AUDIO)) apply_audio();
-    if (ch) settings_changed();
+    if (ch & CTL_AUDIO) audio_settings_changed();
+    if (ch & ~CTL_AUDIO) settings_changed();
 }
 
 /* Touch tracker. The XPT2046 reads noisily as the finger lands and lifts, so the first
@@ -732,6 +762,7 @@ static void adsb_mode(const touch_cal_t *cal)
             busy += esp_timer_get_time() - t0;
         }
         int64_t now = esp_timer_get_time();
+        audio_settings_try_save(false);
         if (n < BUF || now - t_yield > 50000) { vTaskDelay(1); t_yield = now; }
         if (now - t_touch > 20000) {
             t_touch = now;
@@ -800,6 +831,7 @@ static void sensor_mode(const touch_cal_t *cal)
     }
     const uint32_t previous_freq = sdr_freq();
     settings_maybe_save(true); /* never persist the sensor center as receiver frequency */
+    audio_settings_try_save(true);
     ESP_LOGI(TAG, "WH2 / Steelmate foreground decoder: 433.92 MHz");
     audio_pause(true);
     if (!audio_wait_paused(250)) {
@@ -851,6 +883,7 @@ static void sensor_mode(const touch_cal_t *cal)
             busy += esp_timer_get_time() - t0;
         }
         int64_t now = esp_timer_get_time();
+        audio_settings_try_save(false);
         while (info.rows && sensor_event_expired(seen_us[info.rows - 1], (uint64_t)now)) {
             info.rows--;
             info.event[info.rows][0] = 0;
@@ -949,6 +982,7 @@ static void scan_mode(const touch_cal_t *cal, int kind)
     int logged_sweeps = 0;
     while (s_sv_action != SV_EXIT) {
         int64_t now = esp_timer_get_time();
+        audio_settings_try_save(false);
         if (ok) radio_scan_poll();
         s_sv_action = SV_NONE;
         poll_touch(cal);
@@ -1000,7 +1034,9 @@ void ui_run(const touch_cal_t *cal)
     adsb_view_init();
     scan_view_init();
     sensor_view_init();
-    nvs_open("sdr", NVS_READWRITE, &s_nvs);
+    esp_err_t nvs_err = nvs_open("sdr", NVS_READWRITE, &s_nvs);
+    s_nvs_ready = nvs_err == ESP_OK;
+    if (!s_nvs_ready) ESP_LOGW(TAG, "NVS open failed (%s); audio fails muted", esp_err_to_name(nvs_err));
     view_set_theme(nvs_int("theme", 0));
     s_ctl.range_auto = nvs_int("rauto", 1);
     s_ctl.ref_db = nvs_int("ref", -20);
@@ -1011,8 +1047,16 @@ void ui_run(const touch_cal_t *cal)
     s_tune_step = tune_step_index(nvs_int("tstep", TUNE_STEP_DEFAULT));
     view_set_tune_step(tune_step_label(s_tune_step));
 #endif
-    s_ctl.vol = nvs_int("vol", 4);
-    s_ctl.sql = nvs_int("sql", 0);
+    audio_settings_t boot_audio = {.volume = 4, .squelch = 0, .muted = true};
+    if (s_nvs_ready) {
+        nvs_err = audio_settings_store_load(s_nvs, &boot_audio);
+        if (nvs_err != ESP_OK)
+            ESP_LOGW(TAG, "audio settings load failed (%s); starting muted", esp_err_to_name(nvs_err));
+    }
+    s_ctl.vol = boot_audio.volume;
+    s_ctl.sql = boot_audio.squelch;
+    s_muted = boot_audio.muted;
+    view_set_mute(s_muted);
     int saved_direct = nvs_int("direct", 0);
     if (saved_direct >= 0 && saved_direct <= 2 && saved_direct != sdr_direct_mode())
         sdr_set_direct_mode(saved_direct);     /* V4 rejects I/Q; normal tuner stays active */
@@ -1023,6 +1067,7 @@ void ui_run(const touch_cal_t *cal)
     s_ctl.bias_error = !sdr_bias_command_ok();
     load_memories();
     apply_view();
+    audio_set_mute(s_muted); /* request is queued before the codec can output samples */
     if (audio_init()) apply_audio();
 
     draw_header(-1);
@@ -1034,6 +1079,7 @@ void ui_run(const touch_cal_t *cal)
     int64_t t_log = esp_timer_get_time(), t_dsp = 0, t_lcd = 0;
     uint64_t b_log = sdr_total_bytes();
     for (;;) {
+        audio_settings_try_save(false); /* also retry while the SDR is lost */
         if (s_adsb_req) {
             s_adsb_req = false;
             adsb_mode(cal);
@@ -1066,7 +1112,10 @@ void ui_run(const touch_cal_t *cal)
                 continue; /* retry cancellation; never reopen over an active RX task */
             }
             vTaskDelay(pdMS_TO_TICKS(2000));
-            while (!sdr_open(5000, NULL, 0)) vTaskDelay(pdMS_TO_TICKS(1000));
+            while (!sdr_open(5000, NULL, 0)) {
+                audio_settings_try_save(false);
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
             restarts = 0;
             view_reset();
             draw_header(-1);

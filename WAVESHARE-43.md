@@ -27,7 +27,10 @@ shortcut; use **MENU → LOOK** to change theme, which is committed immediately.
 Phosphor uses only green RGB565.
 Use the footer or **MENU → AUDIO** for 3 kHz USB/LSB reception.
 The footer **MUTE/UNMUTE** key silences the speaker without losing the saved
-volume or interrupting IQ reception; it resets to unmuted after a reboot.
+volume or interrupting IQ reception. Mute, volume and squelch now save
+immediately in one NVS audio-control record and restore before audio is
+unpaused at boot; failed saves are logged and retried. Host-simulated power
+loss passes, but a real board power-cycle has not yet been checked.
 **MENU → RF INPUT** adds Bias-T and TUNER/ADC I/ADC Q. The firmware commands
 Bias-T OFF on boot and USB reconnect (unless EEPROM forces it ON), but a failed
 USB write leaves power unknown: RF INPUT shows "BIAS ? RETRY OFF" and OFF retries.
@@ -52,7 +55,7 @@ two of three repeated packets (one fails the strict preamble check). There is
 no Blog V4 live-capture or on-board throughput verification yet. This is not
 generic rtl_433 support and
 must not be relied on for vehicle safety. See [ROADMAP.md](ROADMAP.md) for
-later formats and the separate mute/volume/squelch power-cycle persistence task.
+later formats and the outstanding on-board audio-settings power-cycle check.
 SSB currently has a fixed audio gain rather than speech AGC; set SQL to OPEN
 (0) because its power-based squelch can mute an already-present voice signal.
 

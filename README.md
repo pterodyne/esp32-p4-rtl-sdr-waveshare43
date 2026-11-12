@@ -4,6 +4,11 @@ ESP-IDF port of [John O'Dell's P4 SDR v1.2.0](https://github.com/John-ODell/esp3
 for the **Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3** with its 480 × 800 ST7701
 MIPI-DSI screen and GT911 touch controller. It adapts the original RTL-SDR
 receiver to this integrated display board.
+This line is maintained independently: changes are pushed only to this
+repository, with no pull or push to the original project. Its original source
+attribution and GPL-3.0 license remain. GitHub currently still labels this
+repository a fork; leaving the fork network is a separate, irreversible
+GitHub account action that removes pull-request and other repository metadata.
 
 The inherited application includes a spectrum/waterfall receiver, AM/FM audio,
 RDS, ADS-B aircraft display, channel memories, microSD logging, and Wi-Fi/BLE
@@ -83,9 +88,13 @@ throughput, false-positive behavior and decoding of your own devices have
 **not been verified on hardware**. Do not
 rely on this experimental TPMS screen for vehicle safety decisions.
 
-Mute is currently transient and volume/squelch use a delayed settings save.
-Restoring all three after an immediate power-off is a separate unchecked
-[roadmap task](ROADMAP.md); do not assume that behavior is implemented here.
+Mute, volume and squelch now save together in a versioned NVS audio-control
+record immediately on each change, outside the audio task. Previous saved
+volume and squelch values are read when that record is absent. The three
+controls load before audio is unpaused; mute remains distinct from volume 0.
+Failed writes are logged and retried with the latest desired values. Simulated
+immediate power-loss, migration, failure and retry host tests pass, but **an
+on-board power-cycle check remains outstanding** in [ROADMAP.md](ROADMAP.md).
 
 ## Hardware status
 
