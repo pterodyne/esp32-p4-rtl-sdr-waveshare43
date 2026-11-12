@@ -4,7 +4,7 @@
  * under the finger and fires when the finger lifts (slide to the right one first), and the
  * -/+ steppers fire on press and repeat while held.
  *
- *   menu:   GAIN  RANGE  ZOOM  AUDIO / BAND  SCAN  LOOK  RF INPUT  DONE
+ *   menu:   GAIN  RANGE  ZOOM  AUDIO / BAND  SCAN  LOOK  RF INPUT  SETTINGS  DONE
  *   GAIN:   -  value  +,  AGC / 15 dB / 30 dB / MAX
  *   RANGE:  top -/+, span -/+, AUTO
  *   ZOOM: four horizontal FFT spans; AUDIO: six modes, volume and squelch -/+
@@ -33,6 +33,7 @@ typedef struct {
     bool bias, bias_forced, bias_error;       /* antenna DC power; failed USB command is unknown */
     int direct;                               /* 0 tuner/auto, 1 ADC I, 2 ADC Q */
     bool direct_supported;                    /* false for Blog V4 upconverter */
+    int screen_timeout; /* seconds: 0 never, 30, 60, 90 */
     int look;                                /* set with CTL_LOOK: the look picked */
     uint32_t freq;                           /* tuned now (SAVE stores it) */
     uint32_t mem_hz[PANEL_MEMS];             /* channel memories, 0 = empty */
@@ -48,7 +49,7 @@ enum { CTL_GAIN = 1, CTL_RANGE = 2, CTL_ZOOM = 4, CTL_BW = 8, CTL_BAND = 16, CTL
        CTL_MEM_SAVE = 2048,                  /* c->freq and c->bw stored in slot c->mem */
        CTL_MEM_TUNE = 4096,                  /* tune slot c->mem (the panel stays as is) */
        CTL_MEM_SCAN = 8192, CTL_BIAS = 16384, CTL_DIRECT = 32768,
-       CTL_SENSOR = 65536 };                /* foreground WH2 + Steelmate at 433.92 MHz */
+       CTL_SCREEN = 131072, CTL_SENSOR = 65536 };                /* foreground narrow WH2 + Steelmate, selectable RF center */
 enum { PANEL_PRESS, PANEL_MOVE, PANEL_RELEASE };
 
 void panel_init(void);

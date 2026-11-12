@@ -4,12 +4,17 @@ This is a living list of possible work, not a claim that all features are implem
 
 ## Current work
 
-- [x] Replace the six Waveshare tuning arrows with two arrows and a selected, cyclic tuning-step indicator (100 Hz through 1 MHz). Host previews cover portrait/landscape layouts and both revision builds pass; four-way on-board touch remains to be checked.
+- [x] Replace the six Waveshare tuning arrows with two arrows and a selected, cyclic tuning-step indicator (100 Hz through 5 MHz, including 500 kHz; stable saved IDs). Host previews cover portrait/landscape layouts and both revision builds pass; four-way on-board touch remains to be checked.
 - [x] Add paginated AM broadcast, shortwave and CB receive presets with host-tested frequency/mode selection. The V4 tuner range covers the chosen centers; live board reception remains to be checked.
 - [x] Prototype Fine Offset WH2 weather and Steelmate TP-S15-family TPMS decoders in an opt-in foreground screen using the existing USB driver's IQ ring. Recorded fixture and negative host tests pass; this is **not** generic device compatibility or proof of live V4 reception.
 - [ ] On the rev3 board, measure live WH2/Steelmate hit rate, USB backlog, dropped-IQ counts, decoder load, memory and audio/waterfall restoration before calling the narrow formats hardware-supported. The strict TPMS preamble check rejects one of three packets when the 250 kS/s fixture is resampled to 2.4 MS/s; assess that tradeoff with a live capture before relaxing it. Characterize TPMS fixed-power burst gating against broadband/adjacent RF noise and add an adaptive floor or overflow/rejection counters if real captures justify it.
 - [x] Implement prompt mute, volume and squelch persistence in one versioned NVS record, loaded before audio unpauses. Legacy saved volume/squelch migrate on first change; failed writes are logged and retried. Simulated immediate power loss, zero-volume versus mute, migration and NVS failure tests pass. Pending general settings flush before sensor-mode retuning.
-- [ ] Verify the chosen mute, volume and squelch states through a full power-off and restart **on the rev3 board**; check speaker silence before first audible output and test failure reporting with actual flash if possible. Host NVS stubs cannot prove physical retention or flash wear under repeated holds.
+- [x] User confirms the audio-control settings persist through power-off/restart on the rev3 board. This is user-reported hardware evidence; no fresh physical-board test was performed during the current changes.
+- [ ] Separately check speaker silence before first audible output, actual-flash failure reporting and wear under repeated holds; retention confirmation does not establish these properties.
+- [x] Sensors BAND selector adds temporary 315/345/433.92/868.30/915 MHz RF centers, resetting IQ/decoder/readings on retune and restoring the original receiver on exit. Frequency coverage does not add generic Fine Offset 915 MHz protocol support; WH2/TP-S15 remain narrow named formats.
+- [x] BAND preset selection returns to waterfall; tuning arrows and STEP move to a reserved bottom bar. Host previews exercise all looks in portrait/landscape; verify four-way hardware touch.
+- [x] SETTINGS offers persisted 30/60/90-second/never display timeout, safely blanking output/backlight without cutting touch power and consuming the wake gesture. Default never preserves existing behavior. Host policy/NVS/power-order tests and both revision builds pass.
+- [ ] Validate timeout, real backlight/display power reduction, tap wake and decoder/audio continuity on rev3 hardware, including wake during USB failure/recovery. The BSP has PWM backlight + ST7701 DISPON/OFF, not a proven independent panel power-rail switch.
 
 ## Backburner: broad rtl_433 support
 

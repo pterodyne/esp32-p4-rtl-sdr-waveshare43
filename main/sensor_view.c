@@ -19,8 +19,12 @@
 #define KEY_Y (LCD_PORTRAIT ? 46 : 4)
 static uint16_t *s_px;
 static sensor_view_info_t s_last;
-static bool s_hot;
-static bool s_drawn, s_draw_hot;
+static bool s_hot, s_band_hot;
+static const uint32_t bands[SENSOR_BANDS] = {433920000, 315000000, 345000000, 868300000, 915000000};
+uint32_t sensor_view_band_hz(int band) { return bands[band >= 0 && band < SENSOR_BANDS ? band : 0]; }
+static bool band_hit(int x, int y)
+{ return x >= LCD_W - 234 && x < LCD_W - 118 && y >= KEY_Y - 4 && y < KEY_Y + 44; }
+static bool s_drawn, s_draw_hot, s_draw_band_hot;
 static int s_draw_w, s_draw_h, s_draw_theme;
 static view_colors_t K;
 
@@ -35,7 +39,7 @@ void sensor_view_init(void)
     if (!s_px) abort();
 }
 
-void sensor_view_open(void) { s_hot = false; s_drawn = false; }
+void sensor_view_open(void) { s_hot = false; s_band_hot = false; s_drawn = false; }
 
 static void exit_key(const rpi_canvas_t *c)
 {
@@ -57,7 +61,7 @@ void sensor_view_draw(const sensor_view_info_t *info)
 {
     if (!info || !s_px) return;
     bool full = !s_drawn || s_draw_w != LCD_W || s_draw_h != LCD_H || s_draw_theme != view_theme();
-    bool status_changed = full || s_hot != s_draw_hot || info->wh2 != s_last.wh2 ||
+    bool status_changed = full || s_band_hot != s_draw_band_hot || info->band != s_last.band || s_hot != s_draw_hot || info->wh2 != s_last.wh2 ||
                           info->tpms != s_last.tpms || info->dropped_bytes != s_last.dropped_bytes ||
                           info->streaming != s_last.streaming || info->load_percent != s_last.load_percent;
     bool events_changed = full || info->rows != s_last.rows ||
@@ -70,20 +74,25 @@ void sensor_view_draw(const sensor_view_info_t *info)
     rpi_cv_fill(&c, 0, 0, LCD_W, LCD_H, K.bg);
     rpi_cv_fill(&c, 0, 0, LCD_W, BAR_H, rpi_mix565(K.bg, K.btn, 90));
     rpi_cv_fill(&c, 0, BAR_H - 1, LCD_W, 1, K.edge);
-    rpi_cv_text(&c, 8, 8, LCD_PORTRAIT ? "SENSORS" : "433.92 SENSORS", K.accent, 2);
-    if (LCD_PORTRAIT) clipped_text(&c, 8, 58, "433.92 MHz", K.dim);
+    rpi_cv_text(&c, 8, 8, "SENSORS", K.accent, 2);
+    char band_label[24];
+    uint32_t hz = sensor_view_band_hz(info->band);
+    snprintf(band_label, sizeof band_label, "%" PRIu32 ".%02" PRIu32, hz / 1000000, hz / 10000 % 100);
+    rpi_cv_rrect(&c, LCD_W - 232, KEY_Y, 110, 40, 6, s_band_hot ? K.btn_on : K.btn);
+    rpi_cv_text(&c, LCD_W - 226, KEY_Y + 3, "BAND MHz >", K.key_txt, 1);
+    rpi_cv_text(&c, LCD_W - 226, KEY_Y + 21, band_label, K.accent, 1);
+    if (LCD_PORTRAIT) clipped_text(&c, 8, 58, "WH2/TP-S15 only", K.dim);
     char status[68];
     snprintf(status, sizeof status, "WH2 %u  TPMS %u  drop %" PRIu64 " B", info->wh2, info->tpms, info->dropped_bytes);
-    if (!LCD_PORTRAIT) clipped_text(&c, 8, 32, status, K.dim);
     exit_key(&c);
-    if (LCD_PORTRAIT) clipped_text(&c, 8, BAR_H + 6, status, K.dim);
+    clipped_text(&c, 8, BAR_H + 6, status, K.dim);
     char load[48];
-    snprintf(load, sizeof load, "%s  decoder %d%%", info->streaming ? "LISTENING" : "STREAM STOPPED", info->load_percent);
-    clipped_text(&c, 8, BAR_H + (LCD_PORTRAIT ? 28 : 8), load,
+    snprintf(load, sizeof load, "%s decoder %d%% WH2/TP-S15 only", info->streaming ? "LISTENING" : "STREAM STOPPED", info->load_percent);
+    clipped_text(&c, 8, BAR_H + 28, load,
                  info->streaming ? K.accent : K.dim);
     if (!info->rows)
         clipped_text(&c, 8, BAR_H + 60, "No WH2/Steelmate packets in last 60s", K.dim);
-    int top = BAR_H + (LCD_PORTRAIT ? 60 : 38);
+    int top = BAR_H + 60;
     int max = info->rows < SENSOR_VIEW_ROWS ? info->rows : SENSOR_VIEW_ROWS;
     for (int row = 0; row < max; row++) {
         int y = top + row * 36;
@@ -96,11 +105,11 @@ void sensor_view_draw(const sensor_view_info_t *info)
     if (full) rpi_lcd_blit(0, 0, LCD_W, LCD_H, s_px);
     else {
         if (status_changed) {
-            int h = BAR_H + (LCD_PORTRAIT ? 42 : 24);
+            int h = BAR_H + 46;
             rpi_lcd_blit(0, 0, LCD_W, h, s_px);
         }
         if (events_changed) {
-            int y = BAR_H + (LCD_PORTRAIT ? 60 : 38);
+            int y = BAR_H + 60;
             int rows = info->rows > old_rows ? info->rows : old_rows;
             int h = rows ? rows * 36 : 18;
             if (y + h > LCD_H) h = LCD_H - y;
@@ -109,18 +118,21 @@ void sensor_view_draw(const sensor_view_info_t *info)
     }
     s_drawn = true;
     s_draw_hot = s_hot;
+    s_draw_band_hot = s_band_hot;
     s_draw_w = LCD_W;
     s_draw_h = LCD_H;
     s_draw_theme = view_theme();
 }
 
-bool sensor_view_touch(int event, int x, int y)
+int sensor_view_touch(int event, int x, int y)
 {
-    bool hit = exit_hit(x, y), fired = false, old = s_hot;
+    bool hit = exit_hit(x, y), bh = band_hit(x, y), old_band = s_band_hot;
+    int fired = 0;
+    bool old = s_hot;
     if (event == SENSOR_RELEASE) {
-        fired = s_hot && hit;
-        s_hot = false;
-    } else s_hot = hit;
-    if (old != s_hot && !fired) sensor_view_draw(&s_last);
+        fired = s_hot && hit ? SENSOR_EXIT : s_band_hot && bh ? SENSOR_BAND : 0;
+        s_hot = s_band_hot = false;
+    } else { s_hot = hit; s_band_hot = bh; }
+    if ((old != s_hot || old_band != s_band_hot) && !fired) sensor_view_draw(&s_last);
     return fired;
 }

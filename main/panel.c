@@ -70,21 +70,21 @@ const char *panel_band(int i, uint32_t *freq, int *bw, int *zoom)
 
 /* --------------------------------------------------------------------------- keys -- */
 
-enum { P_MENU, P_GAIN, P_RANGE, P_ZOOM, P_BW, P_BAND, P_SCAN, P_LOOK, P_MEM, P_SAVE, P_RF };
-static const char *s_title[] = {"CONTROLS", "GAIN", "RANGE", "ZOOM", "AUDIO", "BAND", "SCAN", "LOOK", "MEMORY", "SAVE TO", "RF INPUT"};
+enum { P_MENU, P_GAIN, P_RANGE, P_ZOOM, P_BW, P_BAND, P_SCAN, P_LOOK, P_MEM, P_SAVE, P_RF, P_SCREEN };
+static const char *s_title[] = {"CONTROLS", "GAIN", "RANGE", "ZOOM", "AUDIO", "BAND", "SCAN", "LOOK", "MEMORY", "SAVE TO", "RF INPUT", "SCREEN TIMEOUT"};
 #define LOOKS 5
 static const char *s_look_sub[LOOKS] = {"clean blue", "Mayhem style", "green CRT", "walnut and amber", "synthwave"};
 
 enum {
     K_LABEL = -1,                            /* text only, not touchable */
     K_BACK, K_DONE, K_WIFI, K_BLE, K_TURN, K_TILE,   /* K_TILE + page: menu tiles */
-    K_GAIN_DN = K_TILE + 11, K_GAIN_UP, K_GAIN_P,   /* K_GAIN_P + 0..3: presets */
+    K_GAIN_DN = K_TILE + 12, K_GAIN_UP, K_GAIN_P,   /* K_GAIN_P + 0..3: presets */
     K_TOP_DN = K_GAIN_P + 4, K_TOP_UP, K_SPAN_DN, K_SPAN_UP, K_AUTO,
     K_ZOOM, K_BW = K_ZOOM + PANEL_ZOOMS, K_BAND = K_BW + PANEL_BWS, K_LOOK = K_BAND + PANEL_BANDS,
     K_VOL_DN = K_LOOK + LOOKS, K_VOL_UP, K_SQL_DN, K_SQL_UP,
     K_MEMORY, K_SAVE, K_MSCAN, K_SLOT,      /* K_SLOT + 0..7: memory slots */
     K_DIRECT = K_SLOT + PANEL_MEMS, K_BIAS_OFF = K_DIRECT + 3, K_BIAS_ON,
-    K_PAGE_PREV, K_PAGE_NEXT, K_SENSOR,
+    K_PAGE_PREV, K_PAGE_NEXT, K_SENSOR, K_SCREEN,
 };
 
 typedef struct {
@@ -165,7 +165,12 @@ static void build(const ctl_t *c)
         grid(GAP, y, w, h, c4, menu_rows, 7, K_TILE + P_RF, "RF INPUT",
              c->bias_error ? (c->bias_forced ? "BIAS ? EEPROM ON" : "BIAS ? RETRY OFF")
                            : c->bias ? "BIAS-T ON" : "bias off")->big = true;
+#ifdef CONFIG_SDR_WAVESHARE_43
+        grid(GAP, y, w, h, c4, menu_rows, 8, K_TILE + P_SCREEN, "SETTINGS", "screen timeout")->big = true;
+        grid(GAP, y, w, h, c4, menu_rows, 9, K_DONE, "DONE", "to radio")->big = true;
+#else
         grid(GAP, y, w, h, c4, menu_rows, 8, K_DONE, "DONE", "to radio")->big = true;
+#endif
         return;
     }
     /* sub page: BACK + title, then the body */
@@ -183,6 +188,14 @@ static void build(const ctl_t *c)
         s_page == P_BAND ? band_title : s_title[s_page], NULL)->big = true;
     if (scan_w) add(LCD_W - GAP - 120, GAP, 120, bar, K_MSCAN, "SCAN", NULL)->big = true;
     switch (s_page) {
+    case P_SCREEN: {
+        static const char *labels[] = {"30 SECONDS", "60 SECONDS", "90 SECONDS", "NEVER"};
+        static const int seconds[] = {30, 60, 90, 0};
+        for (int i = 0; i < 4; i++)
+            grid(GAP, by, bw, bh, 2, 2, i, K_SCREEN + i, labels[i],
+                 i == 3 ? "always on" : "tap to wake")->sel = c->screen_timeout == seconds[i];
+        break;
+    }
     case P_GAIN: {
         int h1 = (bh - GAP) * 55 / 100;
         gain_text(c, v, sizeof v);
@@ -409,6 +422,12 @@ static int act(ctl_t *c, int id, bool *page_change)
     if (id == K_WIFI) return CTL_WIFI;
     if (id == K_BLE) return CTL_BLE;
     if (id == K_SENSOR) return CTL_SENSOR;
+    if (id >= K_SCREEN && id < K_SCREEN + 4) {
+        static const int seconds[] = {30, 60, 90, 0};
+        c->screen_timeout = seconds[id - K_SCREEN];
+        *page_change = true;
+        return CTL_SCREEN; /* reselect also retries a failed save */
+    }
     if (id == K_TURN) return CTL_TURN;
     if (id == K_PAGE_PREV || id == K_PAGE_NEXT) {
         int page_size = LCD_PORTRAIT ? 10 : 12;
@@ -417,7 +436,7 @@ static int act(ctl_t *c, int id, bool *page_change)
         *page_change = true;
         return 0;
     }
-    if (id >= K_TILE && id < K_TILE + 11) { s_page = id - K_TILE; *page_change = true; return 0; }
+    if (id >= K_TILE && id < K_TILE + 12) { s_page = id - K_TILE; *page_change = true; return 0; }
     if (id == K_MEMORY || id == K_SAVE) { s_page = id == K_SAVE ? P_SAVE : P_MEM; *page_change = true; return 0; }
     if (id == K_MSCAN) {
         for (int i = 0; i < PANEL_MEMS; i++) if (c->mem_hz[i]) return CTL_MEM_SCAN;
@@ -498,7 +517,7 @@ static int act(ctl_t *c, int id, bool *page_change)
         c->band = id - K_BAND;
         panel_band(c->band, &f, &c->bw, &c->zoom);
         *page_change = true;
-        return CTL_BAND;
+        return CTL_BAND | CTL_CLOSE;
     }
     return 0;
 }

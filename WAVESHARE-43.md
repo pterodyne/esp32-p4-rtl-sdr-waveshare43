@@ -14,14 +14,14 @@ on load. Landscape draws in software, so it may be slower than portrait.
 The user has confirmed all four rotations work on a rev3 board. The previous
 floating waterfall VOL/SQL controls flickered on board and the interface was
 reported to flash every few seconds. The revised UI stops waterfall blits
-112 pixels above the bottom: a static ZOOM −/+ row changes horizontal spans
+156 pixels above the bottom: a static ZOOM −/+ row changes horizontal spans
 (2.4/1.2 MHz, 600/300 kHz), and fixed WFM/NFM25/NFM12/AM/USB/LSB mode buttons
 sit to the left of VOL/SQL steppers. Footer drawing is cached when unchanged.
 This is host-tested and cross-built but **not yet verified on the board**; if
 flashing continues, inspect UART logs for stream restarts and USB errors.
-The Waveshare header has two tuning arrows and a highlighted STEP selector.
-Tap STEP to cycle 100 Hz, 1/5/9/10/12.5/25/50/100 kHz and 1 MHz; hold an
-arrow to repeat. The selected step is saved and the readout retains a 100 Hz
+The Waveshare bottom tuning bar has two arrows and a highlighted STEP selector.
+Tap STEP to cycle 100 Hz, 1/5/9/10/12.5/25/50/100/500 kHz, 1 MHz and 5 MHz; hold an
+arrow to repeat. Existing saved step IDs keep their original increments. The selected step is saved and the readout retains a 100 Hz
 digit if any adjustment leaves one. The frequency readout itself is not a look
 shortcut; use **MENU → LOOK** to change theme, which is committed immediately.
 Phosphor uses only green RGB565.
@@ -30,7 +30,7 @@ The footer **MUTE/UNMUTE** key silences the speaker without losing the saved
 volume or interrupting IQ reception. Mute, volume and squelch now save
 immediately in one NVS audio-control record and restore before audio is
 unpaused at boot; failed saves are logged and retried. Host-simulated power
-loss passes, but a real board power-cycle has not yet been checked.
+loss passes, and the user confirms audio settings survive power-off/restart on rev3. Silent-first-output and actual-flash failure/wear testing remain separate.
 **MENU → RF INPUT** adds Bias-T and TUNER/ADC I/ADC Q. The firmware commands
 Bias-T OFF on boot and USB reconnect (unless EEPROM forces it ON), but a failed
 USB write leaves power unknown: RF INPUT shows "BIAS ? RETRY OFF" and OFF retries.
@@ -39,23 +39,36 @@ only enable it for a compatible active antenna/LNA with adequate USB supply. On 
 and V4L the ADC I/Q keys are shown but disabled: HF uses the onboard
 upconverter, and forcing direct sampling yields no RF input. Other dongles
 require the selected ADC input to be physically wired. Direct mode is persisted.
-**MENU → BAND** paginates 30 receive presets with PREV/NEXT. It retains
+**MENU → BAND** paginates 30 receive presets with PREV/NEXT; selection returns to the waterfall (ADS-B opens its decoder). It retains
 North American RX presets at 315, 345, 433.92 (the existing 433/70CM slot),
 and 915 MHz, and adds AM broadcast (600/1000/1600 kHz), ten shortwave AM
 starting points (3.95–21.6 MHz) and CB AM (channels 1/9/19/40), plus
 channel 38 USB/LSB. These are tuning/filter templates, not guaranteed active
 stations or packet decoders; the V4 HF path remains TUNER/upconverter.
-**MENU → SCAN → SENSORS** is an experimental foreground 433.92 MHz decoder for
+**MENU → SCAN → SENSORS** is an experimental foreground decoder, initially at 433.92 MHz, for
 named Fine Offset WH2 weather and Steelmate TP-S15-family TPMS packets only.
 It uses the same USB driver and CU8 IQ ring, pauses audio/waterfall, shows
 readings and dropped bytes, and restores the previous frequency on EXIT. The
+sensors screen's **BAND MHz >** key cycles 433.92/315/345/868.30/915 MHz RF
+centers, clearing decoder state/readings/counts and discarding queued old IQ.
+This changes frequency only: WH2 remains a narrow named format, **not generic
+Fine Offset 915 MHz support**. No new device/protocol compatibility is claimed. The
 recorded IQ examples pass host tests at their 250 kS/s source rate. When
 replayed at this firmware's 2.4 MS/s rate, WH2 decodes and Steelmate decodes
 two of three repeated packets (one fails the strict preamble check). There is
 no Blog V4 live-capture or on-board throughput verification yet. This is not
 generic rtl_433 support and
 must not be relied on for vehicle safety. See [ROADMAP.md](ROADMAP.md) for
-later formats and the outstanding on-board audio-settings power-cycle check.
+later formats and remaining hardware checks.
+**MENU → SETTINGS → SCREEN TIMEOUT** selects 30/60/90 seconds or NEVER (default),
+committed promptly to NVS with logged/retried failures. On timeout the firmware
+turns PWM backlight off before ST7701 DISPOFF, and wakes with DISPON before
+backlight on. It does not cut panel/touch/DSI/I2C rails or sleep the processor;
+GT911 remains powered, IQ/audio continue, and the wake gesture is consumed
+through release. All foreground modes poll timeout/wake; a blocking USB reopen
+can delay wake by several seconds. Host policy/NVS/power-order tests and both
+revision builds pass; physical blanking, power draw and tap wake still need a
+board check. Run `sh tools/test_controls.sh` for reproducible host regressions.
 SSB currently has a fixed audio gain rather than speech AGC; set SQL to OPEN
 (0) because its power-based squelch can mute an already-present voice signal.
 

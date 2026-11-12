@@ -22,4 +22,6 @@ esp_err_t rpi_lcd_set_portrait(bool on);
 #ifdef CONFIG_SDR_WAVESHARE_43
 /* Native portrait = 0, then 90/180/270 degrees clockwise. */
 esp_err_t rpi_lcd_set_rotation(int quarter_turns);
+/* Blanks ST7701 output + backlight, never cuts shared touch/I2C/DSI rails. */
+esp_err_t rpi_lcd_set_display_on(bool on);
 #endif

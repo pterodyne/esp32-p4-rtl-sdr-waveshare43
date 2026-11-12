@@ -138,8 +138,10 @@ static const theme_t s_themes[] = {
 #define AUDIO_CTRL_W 208
 #define AUDIO_CTRL_H 72
 #ifdef CONFIG_SDR_WAVESHARE_43
-#define FOOTER_H 112
+#define TUNE_BAR_H 44
+#define FOOTER_H (112 + TUNE_BAR_H)
 #else
+#define TUNE_BAR_H 0
 #define FOOTER_H 80
 #endif
 
@@ -256,6 +258,7 @@ void view_set_fine_tune(bool fine) { s_fine_tune = fine; }
 void view_set_tune_step(const char *label)
 {
     snprintf(s_step_text, sizeof s_step_text, "STEP %s", label ? label : "10k");
+    view_footer_invalidate();
 }
 
 void view_set_audio(const char *label, bool live)
@@ -267,7 +270,7 @@ void view_set_audio(const char *label, bool live)
 /* Controls live in the fixed footer below the waterfall; only drawn keys
  * accept touch, so tapping the volume label does not accidentally toggle mute. */
 static int audio_x(void) { return LCD_W - 8 - AUDIO_CTRL_W; }
-static int audio_y(void) { return LCD_H - 8 - AUDIO_CTRL_H; }
+static int audio_y(void) { return LCD_H - TUNE_BAR_H - 8 - AUDIO_CTRL_H; }
 
 bool view_audio_overlay_at(int x, int y)
 {
@@ -282,7 +285,7 @@ static button_t mode_button(int i)
     int mw = LCD_W - AUDIO_CTRL_W - 18;
     int kw = (mw - (cols - 1) * 4) / cols;
     int x = 6 + i % cols * (kw + 4);
-    int y = FOOTER_H - 80 + (cols == 6 ? 14 : 6 + i / cols * 36);
+    int y = FOOTER_H - TUNE_BAR_H - 80 + (cols == 6 ? 14 : 6 + i / cols * 36);
     return (button_t){x, y, kw, cols == 6 ? 52 : 32, NULL};
 }
 
@@ -357,7 +360,7 @@ void view_audio_controls(int vol, int sql, int bw, int zoom, int pressed)
                     b.y + (b.h - 16) / 2, modes[i], on ? btn_text(true) : T->txt, 1);
     }
     int ox = audio_x();
-    int my = FOOTER_H - 80 + 4;
+    int my = FOOTER_H - TUNE_BAR_H - 80 + 4;
     bool mute_lit = s_muted || pressed == VIEW_MUTE;
     rpi_cv_rrect(&c, ox + 64, my, 58, 31, T->hdr == HDR_PORTAPACK ? 0 : 4,
                  mute_lit ? T->btn_on : T->btn);
@@ -365,7 +368,7 @@ void view_audio_controls(int vol, int sql, int bw, int zoom, int pressed)
     rpi_cv_text(&c, ox + 64 + (58 - rpi_cv_text_w(mute_label, 1)) / 2, my + 7,
                 mute_label, mute_lit ? btn_text(true) : T->txt, 1);
     for (int row = 0; row < 2; row++) {
-        int y = FOOTER_H - 80 + 4 + row * 33;
+        int y = FOOTER_H - TUNE_BAR_H - 80 + 4 + row * 33;
         char text[20];
         if (!row) snprintf(text, sizeof text, "VOL %d", vol);
         else if (sql) snprintf(text, sizeof text, "SQL %d", sql);
@@ -381,6 +384,17 @@ void view_audio_controls(int vol, int sql, int bw, int zoom, int pressed)
                         sign, on ? btn_text(true) : T->txt, 1);
         }
     }
+#ifdef CONFIG_SDR_WAVESHARE_43
+    for (int i = 0; i < VIEW_NBTN; i++) {
+        button_t b = s_btn[i];
+        if (!b.w || b.y < LCD_H - TUNE_BAR_H) continue;
+        b.y -= LCD_H - FOOTER_H;
+        bool on = i == VIEW_STEP || i == pressed;
+        rpi_cv_rrect(&c, b.x, b.y, b.w, b.h, 5, on ? T->btn_on : T->btn);
+        rpi_cv_text(&c, b.x + (b.w - rpi_cv_text_w(b.label, 1)) / 2,
+                    b.y + (b.h - 16) / 2, b.label, on ? btn_text(true) : T->txt, 1);
+    }
+#endif
     rpi_lcd_blit(0, LCD_H - FOOTER_H, LCD_W, FOOTER_H, s_audio_ctrl);
     s_footer_vol = vol; s_footer_sql = sql; s_footer_bw = bw;
     s_footer_zoom = zoom; s_footer_pressed = pressed;
@@ -414,7 +428,7 @@ static void scale(float *lo, float *hi, float *wlo, float *whi)
 }
 float view_floor(void) { return s_floor; }
 
-/* Waveshare: two arrows and a step selector, keeping the frequency readout tappable.
+/* Waveshare: bottom tuning bar; header frequency is display-only.
  * Keep the old four-key layout on smaller kits. */
 static void layout(void)
 {
@@ -428,20 +442,15 @@ static void layout(void)
     const int y = T->btn_y, h = T->btn_h;
     memset(s_btn, 0, sizeof s_btn);
 #ifdef CONFIG_SDR_WAVESHARE_43
-    if (!LCD_PORTRAIT) {
-        s_btn[VIEW_DN1M] = (button_t){4, y, 92, h, "<"};
-        s_btn[VIEW_STEP] = (button_t){102, y, 100, h, s_step_text};
-        s_btn[VIEW_UP1M] = (button_t){612, y, 92, h, ">"};
-        s_btn[VIEW_GAIN] = (button_t){738, y, 56, h, NULL};
-        s_hdr_h = T->hdr_h;
-        s_spec_h = T->spec_h;
-        s_ro_x0 = 208; s_ro_x1 = 600;
-        return;
-    }
-    int row_y = T->hdr_h + 3;
-    s_btn[VIEW_DN1M] = (button_t){4, row_y, 86, PORT_KEYS - 6, "<"};
-    s_btn[VIEW_STEP] = (button_t){96, row_y, LCD_W - 192, PORT_KEYS - 6, s_step_text};
-    s_btn[VIEW_UP1M] = (button_t){LCD_W - 90, row_y, 86, PORT_KEYS - 6, ">"};
+    int row_y = LCD_H - TUNE_BAR_H + 3;
+    s_btn[VIEW_DN1M] = (button_t){4, row_y, 86, TUNE_BAR_H - 6, "<"};
+    s_btn[VIEW_STEP] = (button_t){96, row_y, LCD_W - 192, TUNE_BAR_H - 6, s_step_text};
+    s_btn[VIEW_UP1M] = (button_t){LCD_W - 90, row_y, 86, TUNE_BAR_H - 6, ">"};
+    s_btn[VIEW_GAIN] = (button_t){LCD_W - 62, y, 56, h, NULL};
+    s_hdr_h = T->hdr_h;
+    s_spec_h = T->spec_h + (LCD_PORTRAIT ? PORT_SPEC : 0);
+    s_ro_x0 = 4; s_ro_x1 = LCD_W - 70;
+    return;
 #else
     if (!LCD_PORTRAIT) {
         static const int bx[VIEW_NBTN][2] = {
@@ -655,7 +664,7 @@ void view_header(uint32_t freq, const char *gain, int pressed)
 
     for (int i = 0; i < VIEW_THEME; i++) {
         const button_t *b = &s_btn[i];
-        if (!b->w) continue;
+        if (!b->w || b->y >= s_hdr_h) continue;
         bool on = i == pressed || i == VIEW_STEP; /* selected step is always indicated */
         button(&c, b, on);
         if (i == VIEW_GAIN) {                    /* opens Controls; shows the gain underneath */
@@ -710,7 +719,7 @@ void view_header(uint32_t freq, const char *gain, int pressed)
 
 int view_button_at(int x, int y)
 {
-    if (y >= s_hdr_h) return -1;
+    if (y < 0 || y >= LCD_H) return -1;
     for (int i = 0; i < VIEW_NBTN; i++) {
         const button_t *b = &s_btn[i];
         if (!b->w) continue;

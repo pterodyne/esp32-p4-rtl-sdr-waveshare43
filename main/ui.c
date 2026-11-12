@@ -40,6 +40,7 @@
 #include "sensor_view.h"
 #include "sensor_event_age.h"
 #include "settings_save_due.h"
+#include "screen_timeout_store.h"
 #include "sensor_pipeline.h"
 #include "radio_scan.h"
 #include "audio.h"
@@ -68,12 +69,16 @@ static int s_av_action;                     /* last ADS-B screen key fired */
 static bool s_scan;                         /* in a Wi-Fi / BLE scanner */
 static int s_scan_req = -1;                 /* SV_WIFI / SV_BLE asked for */
 static int s_sv_action;                     /* last scanner key fired */
+static int s_sensor_band_action;
 static bool s_sensor, s_sensor_req, s_sensor_exit; /* same SDR ring, foreground 433.92 MHz */
 static bool s_mscan;                        /* hopping through the channel memories */
 static int s_mscan_i = -1;                  /* slot tuned by the scan */
 static int64_t s_hop_at, s_dwell_until;
 
-static void draw_header(int pressed) { view_header(sdr_freq(), sdr_gain_label(sdr_gain_index()), pressed); }
+static void draw_header(int pressed) {
+    view_header(sdr_freq(), sdr_gain_label(sdr_gain_index()), pressed);
+    if (!s_panel) view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, pressed);
+}
 
 /* ---------------------------------------------------------------------- settings -- */
 
@@ -82,6 +87,16 @@ static bool s_nvs_ready;
 static int64_t s_save_at;
 static bool s_theme_save_failed;
 static audio_save_pending_t s_audio_pending;
+static screen_idle_t s_screen_idle;
+static int64_t s_screen_save_at;
+static void screen_settings_try_save(void)
+{
+    int64_t now = esp_timer_get_time();
+    if (!s_screen_save_at || now < s_screen_save_at) return;
+    esp_err_t err = screen_timeout_save_reopening(&s_nvs_ready, &s_nvs, s_ctl.screen_timeout);
+    s_screen_save_at = err == ESP_OK ? 0 : now + 5000000;
+    if (err != ESP_OK) ESP_LOGW(TAG, "screen timeout save failed (%s); retry in 5 s", esp_err_to_name(err));
+}
 #ifdef CONFIG_SDR_WAVESHARE_43
 static int s_tune_step = TUNE_STEP_DEFAULT;
 #endif
@@ -444,7 +459,13 @@ static void do_action(int act)
 static void panel_event(int ev, int x, int y, int64_t now)
 {
     int ch = panel_touch(&s_ctl, ev, x, y, now);
-    if (ch & CTL_CLOSE) { panel_show(false); return; }
+    if (ch & CTL_SCREEN) {
+        s_screen_idle.last_touch = now;
+        s_screen_save_at = now;
+        screen_settings_try_save();
+        return;
+    }
+    if ((ch & CTL_CLOSE) && !(ch & CTL_BAND)) { panel_show(false); return; }
     if (ch & CTL_TURN) {
         turn();
         return;
@@ -525,6 +546,7 @@ static void panel_event(int ev, int x, int y, int64_t now)
     if (ch & (CTL_BW | CTL_BAND | CTL_AUDIO)) apply_audio();
     if (ch & CTL_AUDIO) audio_settings_changed();
     if (ch & ~CTL_AUDIO) settings_changed();
+    if (ch & CTL_CLOSE) panel_show(false); /* tune/apply first, then restore waterfall */
 }
 
 /* Touch tracker. The XPT2046 reads noisily as the finger lands and lifts, so the first
@@ -540,11 +562,32 @@ static void poll_touch(const touch_cal_t *cal)
     uint16_t rx, ry, rz;
     int64_t now = esp_timer_get_time();
 
-    if (!xpt2046_read_raw(&rx, &ry, &rz)) {
+    bool contact = xpt2046_read_raw(&rx, &ry, &rz);
+    screen_settings_try_save();
+#ifdef CONFIG_SDR_WAVESHARE_43
+    int screen_action = screen_idle_update(&s_screen_idle, s_ctl.screen_timeout, now, contact);
+    if (screen_action & (SCREEN_SLEEP | SCREEN_WAKE)) {
+        esp_err_t err = rpi_lcd_set_display_on(!(screen_action & SCREEN_SLEEP));
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "display power transition failed (%s); tap to retry wake", esp_err_to_name(err));
+            s_screen_idle.asleep = true; /* uncertain/dark: next gesture must only wake */
+            s_screen_idle.last_touch = now; /* avoid a failed-off busy loop */
+        }
+    }
+    if (screen_action & SCREEN_CONSUME) {
+        down = false; n = 0; act = -1; where = 5;
+        return; /* entire wake gesture, including lift, is not a UI event */
+    }
+#endif
+    if (!contact) {
         if (down && n > 0) {                /* release */
             if (where == 3) s_av_action = adsb_view_touch(AV_RELEASE, x, y);
             else if (where == 4) s_sv_action = scan_view_touch(SV_RELEASE, x, y);
-            else if (where == 9) s_sensor_exit = sensor_view_touch(SENSOR_RELEASE, x, y);
+            else if (where == 9) {
+                int action = sensor_view_touch(SENSOR_RELEASE, x, y);
+                s_sensor_exit = action == SENSOR_EXIT;
+                s_sensor_band_action = action == SENSOR_BAND;
+            }
             else if (where == 0 && act >= 0) draw_header(-1);
             else if (where == 6) { s_audio_pressed = -1; view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, -1); }
             else if (where == 7) {
@@ -588,7 +631,7 @@ static void poll_touch(const touch_cal_t *cal)
         } else if (s_sensor) {
             where = 9;
             sensor_view_touch(SENSOR_PRESS, x, y);
-        } else if (y < view_tune_y()) {
+        } else if (y < view_tune_y() || (!s_panel && view_button_at(x, y) >= 0)) {
             where = 0;
             act = view_button_at(x, y);
             if (act >= 0) { do_action(act); next_repeat = now + 450000; }
@@ -848,9 +891,24 @@ static void sensor_mode(const touch_cal_t *cal)
     sensor_view_open();
     s_sensor = true;
     s_sensor_exit = false;
+    s_sensor_band_action = false;
     sensor_view_draw(&info);
     int64_t t_touch = 0, t_draw = 0, t_load = esp_timer_get_time(), t_yield = t_load, busy = 0;
     while (sdr_streaming() && !s_sensor_exit) {
+        if (s_sensor_band_action) {
+            s_sensor_band_action = false;
+            int band = (info.band + 1) % SENSOR_BANDS;
+            sdr_set_freq(sensor_view_band_hz(band));
+            vTaskDelay(pdMS_TO_TICKS(20));
+            pos = sdr_total_bytes();
+            dropped = 0; /* per-band drops, like the reset packet counters */
+            sensor_pipeline_reset(&s_sensor_pipeline);
+            memset(&info, 0, sizeof info);
+            memset(seen_us, 0, sizeof seen_us);
+            info.band = band;
+            info.streaming = true;
+            sensor_view_draw(&info);
+        }
         int64_t t0 = esp_timer_get_time();
         uint64_t dropped_before = dropped;
         size_t n = sdr_ring_read(s_iq, &pos, 32 * 1024, &dropped);
@@ -1038,6 +1096,9 @@ void ui_run(const touch_cal_t *cal)
     s_nvs_ready = nvs_err == ESP_OK;
     if (!s_nvs_ready) ESP_LOGW(TAG, "NVS open failed (%s); audio fails muted", esp_err_to_name(nvs_err));
     view_set_theme(nvs_int("theme", 0));
+    s_ctl.screen_timeout = nvs_int("screen_sec", 0);
+    if (!screen_timeout_valid(s_ctl.screen_timeout)) s_ctl.screen_timeout = 0;
+    s_screen_idle.last_touch = esp_timer_get_time();
     s_ctl.range_auto = nvs_int("rauto", 1);
     s_ctl.ref_db = nvs_int("ref", -20);
     s_ctl.range_db = nvs_int("rspan", 60);
@@ -1080,6 +1141,7 @@ void ui_run(const touch_cal_t *cal)
     uint64_t b_log = sdr_total_bytes();
     for (;;) {
         audio_settings_try_save(false); /* also retry while the SDR is lost */
+        poll_touch(cal); /* timeout/wake also work during stream loss */
         if (s_adsb_req) {
             s_adsb_req = false;
             adsb_mode(cal);
@@ -1114,6 +1176,7 @@ void ui_run(const touch_cal_t *cal)
             vTaskDelay(pdMS_TO_TICKS(2000));
             while (!sdr_open(5000, NULL, 0)) {
                 audio_settings_try_save(false);
+                poll_touch(cal);
                 vTaskDelay(pdMS_TO_TICKS(1000));
             }
             restarts = 0;
