@@ -7,6 +7,7 @@ This is a living list of possible work, not a claim that all features are implem
 - [x] Replace the six Waveshare tuning arrows with two arrows and a selected, cyclic tuning-step indicator (100 Hz through 1 MHz). Host previews cover portrait/landscape layouts and both revision builds pass; four-way on-board touch remains to be checked.
 - [x] Add paginated AM broadcast, shortwave and CB receive presets with host-tested frequency/mode selection. The V4 tuner range covers the chosen centers; live board reception remains to be checked.
 - [ ] Explore small, GPL-compatible TPMS and weather-sensor decoders using the **existing** USB driver and a separate IQ-ring cursor or foreground mode. Require named device/protocols or captured signals and tests before claiming compatibility. Do not decode audio or IQ callback work on the USB task.
+- [ ] Restore the selected **mute, volume, and squelch** states after restart or full power removal. Mute is currently transient; volume and squelch have a delayed settings save. Commit control changes promptly outside the audio task, restore them before first audible output, distinguish muted audio from zero volume, and report/retry NVS write failures. Cover an immediate simulated power loss and an on-board power-cycle test. Flush any pending receiver settings before a long foreground mode changes the tuning frequency.
 
 ## Backburner: broad rtl_433 support
 
