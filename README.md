@@ -5,6 +5,18 @@ for the **Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3** with its 480 × 800 ST7701
 MIPI-DSI screen and GT911 touch controller. It adapts the original RTL-SDR
 receiver to this integrated display board.
 
+## Experimental Waveshare UI previews
+
+![Host-rendered Waveshare Freeform receiver preview](docs/images/waveshare-main-freeform.png)
+
+See the [seven-image screenshot gallery](docs/SCREENSHOTS.md) for Freeform,
+Snap and Peak touch modes, portrait layout, timeout settings and sensor screens.
+These are **host-rendered previews with synthetic RF**, not photographs or proof
+of live reception. They depict the experimental [draft PR #5](https://github.com/pterodyne/esp32-p4-rtl-sdr-waveshare43/pull/5)
+and [RC3 pre-release](https://github.com/pterodyne/esp32-p4-rtl-sdr-waveshare43/releases/tag/waveshare43-touch-rc3),
+**not the firmware on this default branch**. The new touch controls and sensor
+decoders have not been verified on the physical board.
+
 The inherited application includes a spectrum/waterfall receiver, AM/FM audio,
 RDS, ADS-B aircraft display, channel memories, microSD logging, and Wi-Fi/BLE
 scanning through the on-board ESP32-C6. Features beyond the display have not
