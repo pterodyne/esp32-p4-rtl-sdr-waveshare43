@@ -12,9 +12,10 @@
 #include "spectrum.h"
 
 enum { VIEW_DN1M, VIEW_DN100K, VIEW_UP100K, VIEW_UP1M, VIEW_DN100, VIEW_UP100,
-       VIEW_STEP, VIEW_GAIN, VIEW_THEME, VIEW_NBTN,
+       VIEW_STEP, VIEW_GAIN, VIEW_THEME, VIEW_TOUCH_MODE, VIEW_NBTN,
        VIEW_VOL_DN, VIEW_VOL_UP, VIEW_SQL_DN, VIEW_SQL_UP, VIEW_MODE_0,
        VIEW_ZOOM_DN = VIEW_MODE_0 + 6, VIEW_ZOOM_UP, VIEW_MUTE };
+enum { VIEW_TOUCH_FREE, VIEW_TOUCH_SNAP, VIEW_TOUCH_PEAK };
 
 void view_init(uint32_t sample_rate);        /* allocates the frame buffers, aborts if out of memory */
 int view_themes(void);
@@ -37,6 +38,14 @@ void view_set_passband(uint32_t hz);         /* shaded filter width around the c
 void view_set_sideband(int side);            /* -1 LSB, 0 symmetric, +1 USB */
 void view_set_fine_tune(bool fine);          /* show the 100 Hz digit for SSB or a 100 Hz step */
 void view_set_tune_step(const char *label);  /* Waveshare header selected step indicator */
+void view_set_touch_mode(int mode);          /* ephemeral; defaults to Freeform */
+int view_touch_mode(void);
+void view_peak_invalidate(void);              /* retune/stream loss: old FFT is not a current carrier */
+int view_spectrum_bottom(void);              /* exclusive: axis/waterfall never tune */
+/* false: outside the live spectrum or Peak has no qualifying signal nearby.
+ * quantum is the legacy Freeform increment or the saved STEP increment in Snap. */
+bool view_touch_frequency(int x, int y, uint32_t center, uint32_t quantum,
+                          int mode, uint32_t *out_hz);
 /* plate at the top left of the spectrum: label (NULL = none), live = speaker lit */
 void view_set_audio(const char *label, bool live);
 /* Persistent footer below the waterfall: mode choices and volume/squelch steppers. */

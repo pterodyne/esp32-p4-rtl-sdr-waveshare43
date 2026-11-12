@@ -13,6 +13,8 @@ This is a living list of possible work, not a claim that all features are implem
 - [ ] Separately check speaker silence before first audible output, actual-flash failure reporting and wear under repeated holds; retention confirmation does not establish these properties.
 - [x] Sensors BAND selector adds temporary 315/345/433.92/868.30/915 MHz RF centers, resetting IQ/decoder/readings on retune and restoring the original receiver on exit. Frequency coverage does not add generic Fine Offset 915 MHz protocol support; WH2/TP-S15 remain narrow named formats.
 - [x] BAND preset selection returns to waterfall; tuning arrows and STEP move to a reserved bottom bar. Host previews exercise all looks in portrait/landscape; verify four-way hardware touch.
+- [x] Confine touch tuning to the upper spectrum; top-left TOUCH cycles temporary FREEFORM (default), SNAP to saved STEP, and nearest thresholded PEAK within 24 pixels (no candidate means no tune). Host tests cover waveform/axis/waterfall hit rejection and signal selection across themes/orientations.
+- [ ] Validate all three touch-tuning modes and tap coordinates with actual rev3 hardware and signals; host-synthesized FFT peaks do not prove real RF or touch accuracy.
 - [x] SETTINGS offers persisted 30/60/90-second/never display timeout, safely blanking output/backlight without cutting touch power and consuming the wake gesture. Default never preserves existing behavior. Host policy/NVS/power-order tests and both revision builds pass.
 - [ ] Validate timeout, real backlight/display power reduction, tap wake and decoder/audio continuity on rev3 hardware, including wake during USB failure/recovery. The BSP has PWM backlight + ST7701 DISPON/OFF, not a proven independent panel power-rail switch.
 

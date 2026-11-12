@@ -536,6 +536,81 @@ static void test_audio_controls(void)
     puts("audio controls: hit regions and USB/LSB menu selection, all themes and orientations OK");
 }
 
+static void test_touch_tuning(void)
+{
+    static float db[1024];
+    const uint32_t fc = 142000000;
+    view_init(RATE);
+    for (int portrait = 0; portrait < 2; portrait++) {
+        rpi_lcd_set_portrait(portrait != 0);
+        for (int theme = 0; theme < view_themes(); theme++) {
+            view_set_theme(theme);
+            view_set_span(RATE);
+            int sx = LCD_W / 2 + 31, sy = view_tune_y() + 30;
+            uint32_t hz = 0;
+            assert(!view_touch_frequency(sx, sy, fc, 10000, VIEW_TOUCH_FREE, &hz)); /* no fresh FFT */
+            for (int i = 0; i < 1024; i++) db[i] = -100;
+            view_render(db, 1024, fc);
+            assert(view_touch_frequency(sx, sy, fc, 10000, VIEW_TOUCH_FREE, &hz));
+            int64_t raw = (int64_t)fc + (int64_t)(sx - LCD_W / 2) * view_hz_per_px();
+            assert(hz == (uint32_t)((raw + 5000) / 10000 * 10000));
+            assert(view_touch_frequency(sx, sy, fc, 12500, VIEW_TOUCH_SNAP, &hz));
+            assert(hz == (uint32_t)((raw + 6250) / 12500 * 12500));
+            assert(!view_touch_frequency(sx, view_tune_y() - 1, fc, 10000, VIEW_TOUCH_FREE, &hz));
+            assert(!view_touch_frequency(sx, view_spectrum_bottom(), fc, 10000, VIEW_TOUCH_FREE, &hz));
+            assert(!view_touch_frequency(sx, view_spectrum_bottom() + 20, fc, 10000, VIEW_TOUCH_FREE, &hz));
+            assert(!view_touch_frequency(sx, sy, fc, 12500, VIEW_TOUCH_PEAK, &hz)); /* no strong peak: no tune */
+            /* Two peaks: the nearer one wins even when the farther one is taller. */
+            int near_x = sx + 6, far_x = sx - 18;
+            db[near_x * 1024 / LCD_W] = -65;
+            db[far_x * 1024 / LCD_W] = -50;
+            view_render(db, 1024, fc);
+            assert(view_touch_frequency(sx, sy, fc, 12500, VIEW_TOUCH_PEAK, &hz));
+            int64_t near_hz = (int64_t)fc + (int64_t)(near_x - LCD_W / 2) * view_hz_per_px();
+            assert(llabs((int64_t)hz - near_hz) <= 2 * view_hz_per_px());
+            assert(!view_touch_frequency(sx, sy, fc + 1000000, 12500, VIEW_TOUCH_PEAK, &hz));
+            view_peak_invalidate(); /* retune or stream outage cannot reuse an old carrier */
+            assert(!view_touch_frequency(sx, sy, fc, 12500, VIEW_TOUCH_PEAK, &hz));
+            view_render(db, 1024, fc);
+            assert(view_touch_frequency(sx, sy, fc, 12500, VIEW_TOUCH_PEAK, &hz));
+            assert(!view_touch_frequency(sx + 60, sy, fc, 12500, VIEW_TOUCH_PEAK, &hz));
+            view_reset();
+            assert(!view_touch_frequency(sx, sy, fc, 12500, VIEW_TOUCH_PEAK, &hz));
+            /* The previous station's smoothed -100 dB floor must not let a
+             * 9 dB bump at a new -70 dB station masquerade as a 12 dB peak. */
+            for (int i = 0; i < 1024; i++) db[i] = -100;
+            view_render(db, 1024, fc);
+            view_peak_invalidate(); /* retune to a much noisier station */
+            for (int i = 0; i < 1024; i++) db[i] = -70;
+            db[sx * 1024 / LCD_W] = -61;
+            view_render(db, 1024, fc + 1000000);
+            assert(view_floor() > -72 && view_floor() < -68);
+            assert(!view_touch_frequency(sx, sy, fc + 1000000, 12500, VIEW_TOUCH_PEAK, &hz));
+#ifdef CONFIG_SDR_WAVESHARE_43
+            assert(view_button_at(30, 20) == VIEW_TOUCH_MODE);
+            assert(view_button_at(LCD_W - 30, 20) == VIEW_GAIN);
+            assert(view_button_at(LCD_W / 2, 20) == -1);
+            view_set_touch_mode(VIEW_TOUCH_FREE);
+            view_header(fc, "AGC", -1);
+            uint16_t free_button[74 * 54];
+            for (int yy = 0; yy < 54; yy++)
+                memcpy(free_button + yy * 74, &FB(4, yy), 74 * sizeof(uint16_t));
+            view_set_touch_mode(VIEW_TOUCH_SNAP);
+            view_header(fc, "AGC", -1);
+            assert(view_button_at(30, 20) == VIEW_TOUCH_MODE);
+            bool changed = false;
+            for (int yy = 0; yy < 54; yy++)
+                if (memcmp(free_button + yy * 74, &FB(4, yy), 74 * sizeof(uint16_t))) changed = true;
+            assert(changed); /* mode label actually changes on screen */
+            view_set_touch_mode(VIEW_TOUCH_PEAK);
+            assert(view_touch_mode() == VIEW_TOUCH_PEAK);
+            view_set_touch_mode(VIEW_TOUCH_FREE);
+#endif
+        }
+    }
+    puts("touch tune: spectrum-only, STEP snap, local strong FFT peaks, mode button in every look/orientation");
+}
+
 static void test_phosphor_green(void)
 {
     static float db[1024];
@@ -880,6 +955,7 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "--test-bands")) { test_am_sw_cb_pages(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-theme")) { test_theme_header_disabled(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-audio")) { test_audio_controls(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "--test-touch-tuning")) { test_touch_tuning(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-phosphor")) { test_phosphor_green(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-footer-recovery")) { test_footer_stream_recovery(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-rf")) { test_rf_settings(); return 0; }
@@ -888,9 +964,19 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "--test-sensors")) { test_sensor_entry(); return 0; }
     if (argc > 2 && !strcmp(argv[1], "--audio-snapshot")) {
         static float db[1024];
+        bool portrait = false, phosphor = false;
+        int touch_mode = VIEW_TOUCH_FREE;
+        for (int i = 3; i < argc; i++) {
+            if (!strcmp(argv[i], "--portrait")) portrait = true;
+            else if (!strcmp(argv[i], "--phosphor")) phosphor = true;
+            else if (!strcmp(argv[i], "--snap")) touch_mode = VIEW_TOUCH_SNAP;
+            else if (!strcmp(argv[i], "--peak")) touch_mode = VIEW_TOUCH_PEAK;
+            else { fprintf(stderr, "unknown snapshot option: %s\n", argv[i]); return 2; }
+        }
         view_init(RATE);
-        if (argc > 3 && !strcmp(argv[3], "--portrait")) rpi_lcd_set_portrait(true);
-        view_set_theme(argc > 4 && !strcmp(argv[4], "--phosphor") ? 2 : 0);
+        if (portrait) rpi_lcd_set_portrait(true);
+        view_set_theme(phosphor ? 2 : 0);
+        view_set_touch_mode(touch_mode);
         view_set_passband(3000);
         view_set_sideband(1);
         view_set_fine_tune(true);

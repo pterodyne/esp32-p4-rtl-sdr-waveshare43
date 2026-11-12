@@ -40,6 +40,24 @@ saved; existing saved step IDs retain their original increments. The frequency r
 the suppressed-carrier frequency. Phosphor now uses only the green
 RGB565 channel, including its splash and status messages.
 
+On the Waveshare main screen, the **TOUCH** key at the upper left cycles
+**FREEFORM → SNAP → PEAK**. Touch-frequency tuning is limited to the **upper
+spectrum waveform**: a tap must start and end there. The frequency axis,
+waterfall and footer no longer tune when tapped. FREEFORM is the default and
+uses the prior mode/zoom-dependent increments; SNAP rounds to the nearest
+multiple of the selected bottom-bar **STEP**. PEAK takes the nearest strong
+local maximum within 24 screen columns of the press (at least 12 dB above
+the displayed noise floor); if none qualifies, it does **not** retune. The
+TOUCH mode is temporary and resets to FREEFORM on restart; STEP remains saved.
+Host tests cover all looks in landscape/portrait, but physical touch accuracy
+and signal selection are not yet board-verified.
+
+![Host-rendered Waveshare receiver in Freeform mode](docs/images/waveshare-main-freeform.png)
+
+These are **host-rendered previews with synthetic RF**, not photos or live
+reception results. See the [screenshot gallery](docs/SCREENSHOTS.md) for all
+three touch modes, portrait layout, timeout settings and the sensor screens.
+
 The older floating audio controls were reported to flicker on hardware, and
 the interface was reported to flash every few seconds. The static footer and
 bounded waterfall pass host tests and cross-builds, but **their on-board effect

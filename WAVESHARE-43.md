@@ -25,6 +25,14 @@ arrow to repeat. Existing saved step IDs keep their original increments. The sel
 digit if any adjustment leaves one. The frequency readout itself is not a look
 shortcut; use **MENU → LOOK** to change theme, which is committed immediately.
 Phosphor uses only green RGB565.
+The new top-left **TOUCH** key cycles FREEFORM (default), SNAP and PEAK.
+Only the upper spectrum waveform accepts touch tuning; the axis and waterfall
+are inert. FREEFORM retains the previous mode/zoom rounding, SNAP rounds to
+the saved bottom-bar STEP, and PEAK looks for the nearest qualifying local
+signal within 24 pixels of the press, at least 12 dB above the visible floor.
+With no qualifying peak it leaves the receiver where it is. TOUCH mode is not
+saved across restart. The [host-rendered screenshot gallery](docs/SCREENSHOTS.md)
+shows these layouts; confirm actual touch and RF selection on board.
 Use the footer or **MENU → AUDIO** for 3 kHz USB/LSB reception.
 The footer **MUTE/UNMUTE** key silences the speaker without losing the saved
 volume or interrupting IQ reception. Mute, volume and squelch now save

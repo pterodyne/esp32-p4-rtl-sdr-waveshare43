@@ -153,6 +153,7 @@ static int s_hdr_h, s_spec_h;                /* the theme's, plus the portrait e
 typedef struct { int x, y, w, h; const char *label; } button_t;
 static button_t s_btn[VIEW_NBTN];
 static char s_step_text[20] = "STEP 10k";
+static int s_touch_mode;                    /* ephemeral Freeform/Snap/Peak */
 static int s_ro_x0, s_ro_x1;                 /* room for the frequency readout */
 
 static uint32_t s_rate, s_span, s_pb_hz = 200000;   /* sample rate, shown width, shaded passband */
@@ -174,6 +175,9 @@ static float s_floor = -100;
 static char s_audio[24];                      /* audio plate text, empty = no plate */
 static bool s_audio_live;
 static bool s_have;
+static bool s_peak_valid;
+static bool s_floor_fresh;
+static uint32_t s_peak_center;
 
 static void build_tables(void)
 {
@@ -212,6 +216,17 @@ int view_themes(void) { return NTHEMES; }
 const char *view_theme_name(int i) { return (i >= 0 && i < NTHEMES) ? s_themes[i].name : "?"; }
 int view_theme(void) { return (int)(T - s_themes); }
 int view_tune_y(void) { return s_spec_y; }
+int view_spectrum_bottom(void) { return s_axis_y; }
+void view_set_touch_mode(int mode)
+{
+    if (mode >= VIEW_TOUCH_FREE && mode <= VIEW_TOUCH_PEAK) s_touch_mode = mode;
+}
+int view_touch_mode(void) { return s_touch_mode; }
+void view_peak_invalidate(void)
+{
+    s_peak_valid = false;
+    s_floor_fresh = true; /* do not judge fresh IQ against the old center's noise */
+}
 
 void view_colors(view_colors_t *c)
 {
@@ -248,6 +263,7 @@ void view_set_span(uint32_t span)
     s_span = span;
     set_steps();
     s_have = false;
+    view_peak_invalidate();
     s_wf_head = 0;
     memset(s_wf, 0, 2 * MAX_WF_H * LCD_LONG * 2);
 }
@@ -442,6 +458,7 @@ static void layout(void)
     const int y = T->btn_y, h = T->btn_h;
     memset(s_btn, 0, sizeof s_btn);
 #ifdef CONFIG_SDR_WAVESHARE_43
+    s_btn[VIEW_TOUCH_MODE] = (button_t){4, y, 74, h, NULL};
     int row_y = LCD_H - TUNE_BAR_H + 3;
     s_btn[VIEW_DN1M] = (button_t){4, row_y, 86, TUNE_BAR_H - 6, "<"};
     s_btn[VIEW_STEP] = (button_t){96, row_y, LCD_W - 192, TUNE_BAR_H - 6, s_step_text};
@@ -449,7 +466,7 @@ static void layout(void)
     s_btn[VIEW_GAIN] = (button_t){LCD_W - 62, y, 56, h, NULL};
     s_hdr_h = T->hdr_h;
     s_spec_h = T->spec_h + (LCD_PORTRAIT ? PORT_SPEC : 0);
-    s_ro_x0 = 4; s_ro_x1 = LCD_W - 70;
+    s_ro_x0 = 82; s_ro_x1 = LCD_W - 70;
     return;
 #else
     if (!LCD_PORTRAIT) {
@@ -489,6 +506,8 @@ void view_set_theme(int i)
     s_wf_y = s_axis_y + T->axis_h;
     s_wf_h = LCD_H - FOOTER_H - s_wf_y;
     s_wf_head = 0;
+    s_have = false;                         /* do not tune Peak from an old FFT */
+    view_peak_invalidate();
     memset(s_wf, 0, 2 * MAX_WF_H * LCD_LONG * 2);
     build_tables();
     rpi_lcd_fill_rect(0, 0, LCD_W, LCD_H, T->bg);
@@ -498,6 +517,7 @@ void view_set_theme(int i)
 void view_reset(void)
 {
     s_have = false;
+    view_peak_invalidate();
     rpi_lcd_fill_rect(0, s_spec_y, LCD_W, s_spec_h, T->bg);
     rpi_lcd_fill_rect(0, s_wf_y, LCD_W, s_wf_h, 0);
 }
@@ -662,12 +682,19 @@ void view_header(uint32_t freq, const char *gain, int pressed)
         rpi_cv_text(&c, LCD_W - 4 - rpi_cv_text_w(r, 1), 0, r, T->dim, 1);
     }
 
-    for (int i = 0; i < VIEW_THEME; i++) {
+    for (int i = 0; i < VIEW_NBTN; i++) {
         const button_t *b = &s_btn[i];
         if (!b->w || b->y >= s_hdr_h) continue;
         bool on = i == pressed || i == VIEW_STEP; /* selected step is always indicated */
         button(&c, b, on);
-        if (i == VIEW_GAIN) {                    /* opens Controls; shows the gain underneath */
+        if (i == VIEW_TOUCH_MODE) {
+            static const char *names[] = {"FREEFORM", "SNAP", "PEAK"};
+            rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w("TOUCH", 1)) / 2,
+                        b->y + 1, "TOUCH", btn_text(on), 1);
+            const char *name = names[s_touch_mode];
+            rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(name, 1)) / 2,
+                        b->y + b->h - 17, name, btn_text(on), 1);
+        } else if (i == VIEW_GAIN) {             /* opens Controls; shows the gain underneath */
             int ty = b->y + (b->h - 32) / 2;
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w("MENU", 1)) / 2, ty, "MENU", btn_text(on), 1);
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(gain, 1)) / 2, ty + 15, gain,
@@ -728,6 +755,44 @@ int view_button_at(int x, int y)
     return -1;
 }
 
+bool view_touch_frequency(int x, int y, uint32_t center, uint32_t quantum,
+                          int mode, uint32_t *out_hz)
+{
+    if (!out_hz || !s_have || x < 0 || x >= LCD_W || y < s_spec_y || y >= s_axis_y) return false;
+    if (mode == VIEW_TOUCH_PEAK) {
+        if (!s_peak_valid || center != s_peak_center) return false;
+        /* A tap only selects a local maximum within 24 screen columns, at least
+         * 12 dB above the current floor. Equal-distance maxima favor strength.
+         * Compare a 3-pixel neighborhood to reject shoulders. No qualifying peak
+         * means NO TUNE, never a jump to the tap or a remote carrier. */
+        enum { RADIUS = 24, NEIGHBOR = 3 };
+        int best = -1;
+        for (int px = x - RADIUS; px <= x + RADIUS; px++) {
+            if (px < NEIGHBOR || px >= LCD_W - NEIGHBOR || s_col[px] < s_floor + 12) continue;
+            bool top = true, strict = false;
+            for (int d = -NEIGHBOR; d <= NEIGHBOR; d++) {
+                if (!d) continue;
+                if (s_col[px + d] > s_col[px]) top = false;
+                if (s_col[px + d] < s_col[px]) strict = true;
+            }
+            if (top && strict && (best < 0 || abs(px - x) < abs(best - x) ||
+                                  (abs(px - x) == abs(best - x) && s_col[px] > s_col[best])))
+                best = px;
+        }
+        if (best < 0) return false;
+        x = best;
+    } else if (mode != VIEW_TOUCH_FREE && mode != VIEW_TOUCH_SNAP) return false;
+    int64_t hz = (int64_t)center + (int64_t)(x - LCD_W / 2) * s_hz_px;
+    if (mode != VIEW_TOUCH_PEAK) {
+        if (!quantum) return false;
+        hz = ((hz + quantum / 2) / quantum) * quantum;
+    }
+    if (hz < 0) hz = 0;
+    if (hz > UINT32_MAX) hz = UINT32_MAX;
+    *out_hz = (uint32_t)hz;
+    return true;
+}
+
 /* --------------------------------------------------------------------------- axis -- */
 
 /* x of the i-th multiple of step inside the span, or -1 past the right edge */
@@ -785,7 +850,8 @@ static void update_floor(void)
     int acc = 0, b = 0;
     for (; b < 160; b++) { acc += h[b]; if (acc >= LCD_W / 5) break; }
     float f = b - 160 + 0.5f;
-    s_floor = s_have ? s_floor + 0.05f * (f - s_floor) : f;
+    s_floor = s_have && !s_floor_fresh ? s_floor + 0.05f * (f - s_floor) : f;
+    s_floor_fresh = false;
 }
 
 static inline void px_mix(int x, int y, uint16_t col, int t)
@@ -998,6 +1064,8 @@ void view_render(const float *db, int n, uint32_t freq)
     }
     update_floor();
     s_have = true;
+    s_peak_center = freq;
+    s_peak_valid = true;
     render_spectrum(freq);
     push_waterfall_line();
 }
