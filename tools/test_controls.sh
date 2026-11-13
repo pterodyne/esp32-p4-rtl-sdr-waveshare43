@@ -59,7 +59,7 @@ for board in original waveshare43; do
     if [ "$board" = waveshare43 ]; then define='-DCONFIG_SDR_WAVESHARE_43'; fi
     ${CC:-cc} -O2 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-field-initializers \
         $define -Itools/preview/stub -I"$D/include" -I"$D" -Imain $sources -lz -lm -o "$out/preview-$board"
-    for test in audio bands theme phosphor footer-recovery rf ism sensors screen touch-tuning quick-header; do
+    for test in audio bands theme phosphor footer-recovery rf ism sensors screen touch-tuning quick-header range-reset-waterfall; do
         "$out/preview-$board" "--test-$test"
     done
 done

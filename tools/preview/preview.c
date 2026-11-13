@@ -947,6 +947,34 @@ static void test_quick_header(void)
     puts("top-left TOUCH/GAIN/RANGE keys and inert frequency in every layout/look");
 }
 
+static void test_range_reset_waterfall(void)
+{
+    static float db[1024];
+    view_init(RATE);
+    for (int portrait = 0; portrait < 2; portrait++) {
+        rpi_lcd_set_portrait(portrait != 0);
+        view_set_theme(0);
+        view_set_range(true, -20, 60);
+        for (int i = 0; i < 1024; i++) db[i] = -70;
+        for (int i = 0; i < 55; i++) view_render(db, 1024, 142000000);
+        view_blit_waterfall();
+        int y0 = view_spectrum_bottom() + 24; /* all looks have axis <= 24 px */
+        int nonzero = 0;
+        for (int y = y0; y < y0 + 16; y++)
+            for (int x = 0; x < LCD_W; x++) nonzero += FB(x, y) != 0;
+        assert(nonzero > 0); /* actual previously rendered waterfall pixels */
+        view_reset();
+        view_blit_waterfall(); /* new frames must not bring back old rows */
+        for (int y = y0; y < y0 + 16; y++)
+            for (int x = 0; x < LCD_W; x++) assert(FB(x, y) == 0);
+        view_render(db, 1024, 142000000);
+        view_blit_waterfall();
+        for (int y = y0 + 2; y < y0 + 16; y++)
+            for (int x = 0; x < LCD_W; x++) assert(FB(x, y) == 0);
+    }
+    puts("range reset clears stored waterfall lines, not just the visible framebuffer");
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 2 && !strcmp(argv[1], "--settings-snapshot")) {
@@ -992,6 +1020,7 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "--test-screen")) { test_screen_settings(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-sensors")) { test_sensor_entry(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-quick-header")) { test_quick_header(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "--test-range-reset-waterfall")) { test_range_reset_waterfall(); return 0; }
     if (argc > 2 && !strcmp(argv[1], "--audio-snapshot")) {
         static float db[1024];
         bool portrait = false, phosphor = false;

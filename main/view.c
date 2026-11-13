@@ -522,6 +522,8 @@ void view_reset(void)
 {
     s_have = false;
     view_peak_invalidate();
+    s_wf_head = 0;
+    memset(s_wf, 0, 2 * MAX_WF_H * LCD_LONG * 2);
     rpi_lcd_fill_rect(0, s_spec_y, LCD_W, s_spec_h, T->bg);
     rpi_lcd_fill_rect(0, s_wf_y, LCD_W, s_wf_h, 0);
 }
