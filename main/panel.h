@@ -4,12 +4,12 @@
  * under the finger and fires when the finger lifts (slide to the right one first), and the
  * -/+ steppers fire on press and repeat while held.
  *
- *   menu:   GAIN  RANGE  ZOOM  AUDIO / BAND  SCAN  LOOK  RF INPUT  DONE
+ *   menu:   GAIN  RANGE  ZOOM  AUDIO / BAND  SCAN  LOOK  RF INPUT  SETTINGS  DONE
  *   GAIN:   -  value  +,  AGC / 15 dB / 30 dB / MAX
  *   RANGE:  top -/+, span -/+, AUTO
  *   ZOOM: four horizontal FFT spans; AUDIO: six modes, volume and squelch -/+
  *   RF INPUT: Bias-T OFF/ON, tuner / direct ADC I / direct ADC Q (V4 I/Q disabled)
- *   BAND: paged RX presets incl. AM/SW/CB and North American ISM;  SCAN: WIFI, BLE, SAVE, MEMORY
+ *   BAND: paged RX presets incl. AM/SW/CB and North American ISM;  SCAN: WIFI, BLE, SAVE, MEMORY, SENSORS
  *   MEMORY: eight channel slots, tap one to tune it, SCAN to hop through them;  SAVE: tap a slot
  *   to store what's tuned now there
  * In portrait the 4-wide grids stand 2 wide.
@@ -33,6 +33,7 @@ typedef struct {
     bool bias, bias_forced, bias_error;       /* antenna DC power; failed USB command is unknown */
     int direct;                               /* 0 tuner/auto, 1 ADC I, 2 ADC Q */
     bool direct_supported;                    /* false for Blog V4 upconverter */
+    int screen_timeout; /* seconds: 0 never, 30, 60, 90 */
     int look;                                /* set with CTL_LOOK: the look picked */
     uint32_t freq;                           /* tuned now (SAVE stores it) */
     uint32_t mem_hz[PANEL_MEMS];             /* channel memories, 0 = empty */
@@ -47,7 +48,8 @@ enum { CTL_GAIN = 1, CTL_RANGE = 2, CTL_ZOOM = 4, CTL_BW = 8, CTL_BAND = 16, CTL
        CTL_AUDIO = 1024,                     /* volume or squelch */
        CTL_MEM_SAVE = 2048,                  /* c->freq and c->bw stored in slot c->mem */
        CTL_MEM_TUNE = 4096,                  /* tune slot c->mem (the panel stays as is) */
-       CTL_MEM_SCAN = 8192, CTL_BIAS = 16384, CTL_DIRECT = 32768 };
+       CTL_MEM_SCAN = 8192, CTL_BIAS = 16384, CTL_DIRECT = 32768,
+       CTL_SCREEN = 131072, CTL_SENSOR = 65536 };                /* foreground narrow WH2 + Steelmate, selectable RF center */
 enum { PANEL_PRESS, PANEL_MOVE, PANEL_RELEASE };
 
 void panel_init(void);

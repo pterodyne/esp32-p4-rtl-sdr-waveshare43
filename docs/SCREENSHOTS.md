@@ -1,9 +1,7 @@
 # Waveshare 4.3-inch UI previews
 
-These depict experimental [draft PR #5](https://github.com/pterodyne/esp32-p4-rtl-sdr-waveshare43/pull/5)
-and its [RC3 pre-release](https://github.com/pterodyne/esp32-p4-rtl-sdr-waveshare43/releases/tag/waveshare43-touch-rc3),
-**not the firmware currently on the default branch**.
-
+The illustrated firmware is available in the
+[RC3 pre-release](https://github.com/pterodyne/esp32-p4-rtl-sdr-waveshare43/releases/tag/waveshare43-touch-rc3).
 These PNGs are **host-rendered examples from `tools/preview`**, not photos of a
 board and not proof of live RTL-SDR reception. The receiver waveform/waterfall
 is synthetic; the 433.92 MHz sensor example uses illustrative fixture-derived
@@ -29,7 +27,7 @@ The bottom STEP control is separate from the TOUCH mode.
 | --- | --- | --- |
 | ![Screen timeout host preview](images/waveshare-screen-timeout.png) | ![433.92 MHz example host preview](images/waveshare-sensors-433-demo.png) | ![915 MHz empty host preview](images/waveshare-sensors-915-empty.png) |
 
-On the PR branch, reproduce with `./tools/test_controls.sh`, which builds
+Reproduce with `./tools/test_controls.sh`, which builds
 `$TMPDIR/p4-control-tests/preview-waveshare43`, then run its
 `--audio-snapshot`, `--settings-snapshot` or `--sensor-snapshot` modes. For
 example, `--audio-snapshot output.png --peak` renders the Peak key;

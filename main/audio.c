@@ -17,6 +17,7 @@
 #include "es8311_codec.h"
 #include "sdr.h"
 #include "audio.h"
+#include "audio_pause_gate.h"
 #include "audio_output_policy.h"
 
 static const char *TAG = "audio";
@@ -40,7 +41,8 @@ static const char *TAG = "audio";
 #define LAG_KEEP  (20 * BYTES_MS)
 
 static esp_codec_dev_handle_t s_dev;
-static volatile bool s_paused = true, s_open;
+static audio_pause_gate_t s_pause_gate = AUDIO_PAUSE_GATE_INIT;
+static volatile bool s_open;
 static audio_output_requests_t s_output = AUDIO_OUTPUT_REQUESTS_INIT;
 static volatile int s_req_sql = -1;
 static volatile bool s_req_mode, s_req_retune;
@@ -77,7 +79,7 @@ static void audio_task(void *arg)
             lag_max = 0;
             t_stat = now;
         }
-        if (s_paused) {
+        if (audio_pause_gate_task_observe(&s_pause_gate)) {
             was_paused = true;
             s_open = false;
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -172,7 +174,17 @@ void audio_set_mode(demod_mode_t mode, uint32_t bw_hz)
 void audio_set_volume(int v) { audio_output_set_volume(&s_output, v); }
 void audio_set_mute(bool on) { audio_output_set_mute(&s_output, on); }
 void audio_set_squelch(int level) { s_req_sql = level < 0 ? 0 : level > 9 ? 9 : level; }
-void audio_pause(bool on) { s_paused = on; }
+void audio_pause(bool on) { audio_pause_gate_request(&s_pause_gate, on); }
+bool audio_wait_paused(uint32_t timeout_ms)
+{
+    if (!s_dev) return true; /* no codec task */
+    int64_t deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    do {
+        if (audio_pause_gate_acknowledged(&s_pause_gate)) return true;
+        vTaskDelay(1);
+    } while (esp_timer_get_time() < deadline);
+    return false;
+}
 void audio_retuned(void) { s_req_retune = true; }
 bool audio_squelch_open(void) { return s_open; }
 

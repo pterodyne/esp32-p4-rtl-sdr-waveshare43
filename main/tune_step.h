@@ -2,7 +2,7 @@
 #include <stdint.h>
 
 /* Useful manual tuning increments; index is persisted, not the old six-key ID. */
-#define TUNE_STEP_COUNT 10
+#define TUNE_STEP_COUNT 12
 #define TUNE_STEP_DEFAULT 4                 /* 10 kHz */
 int tune_step_index(int raw);                 /* sanitize persisted index */
 uint32_t tune_step_hz(int index);

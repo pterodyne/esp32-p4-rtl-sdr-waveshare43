@@ -12,6 +12,7 @@
 #include "rpi_lcd.h"
 #include "pins.h"
 #include "waveshare_geometry.h"
+#include "display_power.h"
 
 static const char *TAG = "waveshare_lcd";
 static esp_lcd_panel_handle_t s_panel;
@@ -48,6 +49,18 @@ esp_err_t rpi_lcd_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_register_event_callbacks(s_panel, &callbacks, s_copy_done), TAG, "DMA callback");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_panel, true), TAG, "display on");
     return bsp_display_backlight_on();
+}
+
+static esp_err_t panel_switch(bool on) { return esp_lcd_panel_disp_on_off(s_panel, on); }
+static esp_err_t backlight_switch(bool on) {
+    return on ? bsp_display_backlight_on() : bsp_display_backlight_off();
+}
+esp_err_t rpi_lcd_set_display_on(bool on)
+{
+    if (!s_panel) return ESP_ERR_INVALID_STATE;
+    /* BSP shares live touch/I2C; do not reset panel, release PHY LDO, stop
+     * the I2C bus or deinitialize the framebuffer. ST7701 uses DISPON/OFF. */
+    return display_power_set(on, panel_switch, backlight_switch);
 }
 
 esp_err_t rpi_lcd_set_rotation(int quarter_turns)

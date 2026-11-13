@@ -1,9 +1,9 @@
 /* Receiver loop: IQ -> spectrum -> view (drawing lives in view.c and panel.c), touch, settings.
  *
- * Tap the spectrum or waterfall to tune there. Hold a step button to repeat. Tap the frequency
+ * Tap the spectrum (not the axis or waterfall) to tune. Hold a step button to repeat. Tap the frequency
  * readout is display-only; pick a look on the LOOK page. Tap MENU (top right, gain shown under it) for Controls (gain, dB range, zoom,
  * audio: filter and mode, volume, squelch; bands). Touch is sampled three times a frame; menu keys and tuning act when the finger lifts. Everything is kept in NVS namespace "sdr": freq, gaint (tenths of a dB,
- * -1 = AGC), theme, rauto, ref, rspan, zoom, bw, vol, sql, mem (blob: the channel memories); logn is the SD log session (sdlog.c). */
+ * -1 = AGC), theme, rauto, ref, rspan, zoom, bw, audctl (versioned audio-state blob), mem (channel memories); logn is the SD log session (sdlog.c). Legacy vol/sql keys are read when audctl is absent. */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +16,8 @@
 #include "esp_heap_caps.h"
 #include "nvs.h"
 #include "theme_store.h"
+#include "audio_settings_store.h"
+#include "audio_save_pending.h"
 #include "tune_step.h"
 #include "rpi_lcd.h"
 #include "rpi_text.h"
@@ -35,6 +37,12 @@
 #include "sdcard.h"
 #include "sdlog.h"
 #include "scan_view.h"
+#include "sensor_view.h"
+#include "sensor_event_age.h"
+#include "settings_save_due.h"
+#include "screen_timeout_store.h"
+#include "peak_iq_gate.h"
+#include "sensor_pipeline.h"
 #include "radio_scan.h"
 #include "audio.h"
 #include "ui_audio_policy.h"
@@ -50,37 +58,56 @@ static const char *TAG = "ui";
 #define PANEL_FRAME_US 100000
 
 static uint8_t *s_iq;
+static sensor_pipeline_t s_sensor_pipeline;
 static float s_db[NFFT_MAX];
 static ctl_t s_ctl = {.range_auto = true, .ref_db = -20, .range_db = 60, .band = -1,
                       .gain_label = sdr_gain_label, .gain_tenths = sdr_gain_tenths};
 static bool s_panel;                        /* Controls panel is up */
 static int s_audio_pressed = -1;            /* compact waterfall control held under the finger */
-static bool s_muted;                        /* temporary speaker mute; saved VOL is unchanged */
+static bool s_muted;                        /* saved independently from volume zero */
 static bool s_adsb, s_adsb_req;             /* in ADS-B mode / asked for it */
 static int s_av_action;                     /* last ADS-B screen key fired */
 static bool s_scan;                         /* in a Wi-Fi / BLE scanner */
 static int s_scan_req = -1;                 /* SV_WIFI / SV_BLE asked for */
 static int s_sv_action;                     /* last scanner key fired */
+static int s_sensor_band_action;
+static bool s_sensor, s_sensor_req, s_sensor_exit; /* same SDR ring, foreground 433.92 MHz */
 static bool s_mscan;                        /* hopping through the channel memories */
 static int s_mscan_i = -1;                  /* slot tuned by the scan */
 static int64_t s_hop_at, s_dwell_until;
 
-static void draw_header(int pressed) { view_header(sdr_freq(), sdr_gain_label(sdr_gain_index()), pressed); }
+static void draw_header(int pressed) {
+    view_header(sdr_freq(), sdr_gain_label(sdr_gain_index()), pressed);
+    if (!s_panel) view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, pressed);
+}
 
 /* ---------------------------------------------------------------------- settings -- */
 
 static nvs_handle_t s_nvs;
+static bool s_nvs_ready;
 static int64_t s_save_at;
 static bool s_theme_save_failed;
+static audio_save_pending_t s_audio_pending;
+static screen_idle_t s_screen_idle;
+static peak_iq_gate_t s_peak_iq;
+static int64_t s_screen_save_at;
+static void screen_settings_try_save(void)
+{
+    int64_t now = esp_timer_get_time();
+    if (!s_screen_save_at || now < s_screen_save_at) return;
+    esp_err_t err = screen_timeout_save_reopening(&s_nvs_ready, &s_nvs, s_ctl.screen_timeout);
+    s_screen_save_at = err == ESP_OK ? 0 : now + 5000000;
+    if (err != ESP_OK) ESP_LOGW(TAG, "screen timeout save failed (%s); retry in 5 s", esp_err_to_name(err));
+}
 #ifdef CONFIG_SDR_WAVESHARE_43
 static int s_tune_step = TUNE_STEP_DEFAULT;
 #endif
 
 static void settings_changed(void) { s_save_at = esp_timer_get_time() + 3000000; }
 
-static void settings_maybe_save(void)
+static void settings_maybe_save(bool force)
 {
-    if (!s_save_at || esp_timer_get_time() < s_save_at) return;
+    if (!settings_save_due(s_save_at, esp_timer_get_time(), force)) return;
     s_save_at = 0;
     nvs_set_u32(s_nvs, "freq", sdr_freq());
     nvs_set_i32(s_nvs, "gaint", sdr_gain_tenths(sdr_gain_index()));
@@ -93,8 +120,6 @@ static void settings_maybe_save(void)
     nvs_set_i32(s_nvs, "rspan", s_ctl.range_db);
     nvs_set_i32(s_nvs, "zoom", s_ctl.zoom);
     nvs_set_i32(s_nvs, "bw", s_ctl.bw);
-    nvs_set_i32(s_nvs, "vol", s_ctl.vol);
-    nvs_set_i32(s_nvs, "sql", s_ctl.sql);
     nvs_set_i32(s_nvs, "direct", s_ctl.direct); /* bias tee deliberately not persisted */
     nvs_commit(s_nvs);
     ESP_LOGI(TAG, "saved %" PRIu32 " Hz, gain %s, zoom %d, bw %d", sdr_freq(),
@@ -103,9 +128,41 @@ static void settings_maybe_save(void)
 
 static int32_t nvs_int(const char *key, int32_t def)
 {
+    if (!s_nvs_ready) return def;
     int32_t v = def;
     nvs_get_i32(s_nvs, key, &v);
     return v;
+}
+
+/* All flash work stays on the UI task. Retry the latest desired state after a
+ * failed set/commit; a new tap overrides the retry delay immediately. */
+static void audio_settings_try_save(bool force)
+{
+    int64_t now = esp_timer_get_time();
+    if (!s_audio_pending.dirty || (!force && !audio_save_pending_due(&s_audio_pending, now))) return;
+    esp_err_t err = ESP_OK;
+    if (!s_nvs_ready) {
+        err = nvs_open("sdr", NVS_READWRITE, &s_nvs);
+        s_nvs_ready = err == ESP_OK;
+    }
+    if (err == ESP_OK) {
+        audio_settings_t desired = {.volume = s_ctl.vol, .squelch = s_ctl.sql, .muted = s_muted};
+        err = audio_settings_store_save(s_nvs, &desired);
+    }
+    audio_save_pending_result(&s_audio_pending, err == ESP_OK, now);
+    if (err != ESP_OK) ESP_LOGW(TAG, "audio settings save failed (%s); retry in 5 s", esp_err_to_name(err));
+}
+
+static void audio_settings_changed(void)
+{
+    audio_save_pending_mark(&s_audio_pending);
+    audio_settings_try_save(false); /* commit before a fast power-off */
+}
+
+static void peak_wait_fresh_iq(void)
+{
+    peak_iq_gate_start(&s_peak_iq, sdr_total_bytes());
+    view_peak_invalidate();
 }
 
 static bool fine_frequency_visible(void)
@@ -167,6 +224,7 @@ static void tune_memory(int i)
     s_ctl.bw = s_ctl.mem_bw[i];
     s_ctl.band = -1;
     sdr_set_freq(s_ctl.mem_hz[i]);
+    peak_wait_fresh_iq();
     audio_retuned();
     view_set_passband(panel_bw_hz(s_ctl.bw));   /* not apply_view: that clears the waterfall */
     view_set_sideband(s_ctl.bw == 4 ? 1 : s_ctl.bw == 5 ? -1 : 0);
@@ -213,7 +271,7 @@ static void mscan_start(void)
     if (!s_ctl.sql) {                        /* an open squelch would never let it move on */
         s_ctl.sql = 3;
         apply_audio();
-        settings_changed();
+        audio_settings_changed();
         ESP_LOGI(TAG, "memory scan: squelch was open, set to 3");
     }
     s_mscan = true;
@@ -263,6 +321,7 @@ static void show_audio(void)
 static void retune(uint32_t hz)
 {
     sdr_set_freq(hz);
+    peak_wait_fresh_iq();
     audio_retuned();
     view_axis(sdr_freq());
     settings_changed();
@@ -333,6 +392,7 @@ static void do_action(int act)
         view_set_mute(s_muted);
         show_audio();
         view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, s_audio_pressed);
+        audio_settings_changed();
         return;
     }
     if (act == VIEW_ZOOM_DN || act == VIEW_ZOOM_UP) {
@@ -368,12 +428,17 @@ static void do_action(int act)
         if (act == VIEW_SQL_DN && s_ctl.sql > 0) s_ctl.sql--;
         if (act == VIEW_SQL_UP && s_ctl.sql < 9) s_ctl.sql++;
         if (act <= VIEW_VOL_UP) {
-            if (prev != s_ctl.vol) { audio_set_volume(s_ctl.vol); settings_changed(); }
-        } else if (prev != s_ctl.sql) { audio_set_squelch(s_ctl.sql); settings_changed(); }
+            if (prev != s_ctl.vol) { audio_set_volume(s_ctl.vol); audio_settings_changed(); }
+        } else if (prev != s_ctl.sql) { audio_set_squelch(s_ctl.sql); audio_settings_changed(); }
         view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, s_audio_pressed);
         return;
     }
 #ifdef CONFIG_SDR_WAVESHARE_43
+    if (act == VIEW_TOUCH_MODE) {
+        view_set_touch_mode((view_touch_mode() + 1) % (VIEW_TOUCH_PEAK + 1));
+        draw_header(act);                   /* ephemeral mode; never changes saved STEP */
+        return;
+    }
     if (act == VIEW_STEP) {
         s_tune_step = tune_step_next(s_tune_step);
         view_set_tune_step(tune_step_label(s_tune_step));
@@ -409,7 +474,13 @@ static void do_action(int act)
 static void panel_event(int ev, int x, int y, int64_t now)
 {
     int ch = panel_touch(&s_ctl, ev, x, y, now);
-    if (ch & CTL_CLOSE) { panel_show(false); return; }
+    if (ch & CTL_SCREEN) {
+        s_screen_idle.last_touch = now;
+        s_screen_save_at = now;
+        screen_settings_try_save();
+        return;
+    }
+    if ((ch & CTL_CLOSE) && !(ch & CTL_BAND)) { panel_show(false); return; }
     if (ch & CTL_TURN) {
         turn();
         return;
@@ -422,6 +493,11 @@ static void panel_event(int ev, int x, int y, int64_t now)
     if (ch & (CTL_WIFI | CTL_BLE)) {         /* scanners on the C6: their own mode */
         panel_show(false);
         s_scan_req = ch & CTL_WIFI ? SV_WIFI : SV_BLE;
+        return;
+    }
+    if (ch & CTL_SENSOR) {
+        panel_show(false);
+        s_sensor_req = true;
         return;
     }
     if (ch & CTL_GAIN) {
@@ -447,6 +523,7 @@ static void panel_event(int ev, int x, int y, int64_t now)
         } else {
             audio_retuned();
             view_reset();
+            peak_wait_fresh_iq();
         }
     }
     if (ch & CTL_BAND) {
@@ -460,6 +537,7 @@ static void panel_event(int ev, int x, int y, int64_t now)
             return;
         }
         sdr_set_freq(f);
+        peak_wait_fresh_iq();
         audio_retuned();
         draw_header(-1);
     }
@@ -483,7 +561,9 @@ static void panel_event(int ev, int x, int y, int64_t now)
     if (ch & (CTL_RANGE | CTL_ZOOM | CTL_BW | CTL_BAND)) apply_view();
     if (ch & CTL_BW) draw_header(-1);
     if (ch & (CTL_BW | CTL_BAND | CTL_AUDIO)) apply_audio();
-    if (ch) settings_changed();
+    if (ch & CTL_AUDIO) audio_settings_changed();
+    if (ch & ~CTL_AUDIO) settings_changed();
+    if (ch & CTL_CLOSE) panel_show(false); /* tune/apply first, then restore waterfall */
 }
 
 /* Touch tracker. The XPT2046 reads noisily as the finger lands and lifts, so the first
@@ -492,17 +572,39 @@ static void panel_event(int ev, int x, int y, int64_t now)
 static void poll_touch(const touch_cal_t *cal)
 {
     static bool down;
-    static int n, x, y;
-    static int where;                       /* 0 header, 1 panel, 2 tuning, 3 ADS-B, 4 scanner, 5 none, 6 audio, 7 mode, 8 zoom */
+    static int n, x, y, touch_x0;            /* Peak anchors to the press, not release drift */
+    static int where;                       /* 0 header, 1 panel, 2 tuning, 3 ADS-B, 4 scanner, 5 none, 6 audio, 7 mode, 8 zoom, 9 sensors */
     static int act = -1;
     static int64_t next_repeat;
     uint16_t rx, ry, rz;
     int64_t now = esp_timer_get_time();
 
-    if (!xpt2046_read_raw(&rx, &ry, &rz)) {
+    bool contact = xpt2046_read_raw(&rx, &ry, &rz);
+    screen_settings_try_save();
+#ifdef CONFIG_SDR_WAVESHARE_43
+    int screen_action = screen_idle_update(&s_screen_idle, s_ctl.screen_timeout, now, contact);
+    if (screen_action & (SCREEN_SLEEP | SCREEN_WAKE)) {
+        esp_err_t err = rpi_lcd_set_display_on(!(screen_action & SCREEN_SLEEP));
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "display power transition failed (%s); tap to retry wake", esp_err_to_name(err));
+            s_screen_idle.asleep = true; /* uncertain/dark: next gesture must only wake */
+            s_screen_idle.last_touch = now; /* avoid a failed-off busy loop */
+        }
+    }
+    if (screen_action & SCREEN_CONSUME) {
+        down = false; n = 0; act = -1; where = 5;
+        return; /* entire wake gesture, including lift, is not a UI event */
+    }
+#endif
+    if (!contact) {
         if (down && n > 0) {                /* release */
             if (where == 3) s_av_action = adsb_view_touch(AV_RELEASE, x, y);
             else if (where == 4) s_sv_action = scan_view_touch(SV_RELEASE, x, y);
+            else if (where == 9) {
+                int action = sensor_view_touch(SENSOR_RELEASE, x, y);
+                s_sensor_exit = action == SENSOR_EXIT;
+                s_sensor_band_action = action == SENSOR_BAND;
+            }
             else if (where == 0 && act >= 0) draw_header(-1);
             else if (where == 6) { s_audio_pressed = -1; view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, -1); }
             else if (where == 7) {
@@ -515,13 +617,22 @@ static void poll_touch(const touch_cal_t *cal)
                 view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, -1);
             }
             else if (where == 1) panel_event(PANEL_RELEASE, x, y, now);
-            else if (where == 2 && !s_panel && !view_audio_overlay_at(x, y)) {
-                int step = s_ctl.bw >= 4 ? (s_ctl.zoom >= 2 ? 100 : 1000) :
-                           s_ctl.zoom == 0 ? 10000 : s_ctl.zoom == 1 ? 5000 : 1000;
-                int64_t f = (int64_t)sdr_freq() + (int64_t)(x - LCD_W / 2) * view_hz_per_px();
-                f = (f + step / 2) / step * step;
-                retune(f > 0 ? (uint32_t)f : 0);
-                draw_header(-1);
+            else if (where == 2 && !s_panel && x >= 0 && x < LCD_W &&
+                     y >= view_tune_y() && y < view_spectrum_bottom()) {
+                uint32_t quantum = s_ctl.bw >= 4 ? (s_ctl.zoom >= 2 ? 100 : 1000) :
+                                   s_ctl.zoom == 0 ? 10000 : s_ctl.zoom == 1 ? 5000 : 1000;
+                int mode = VIEW_TOUCH_FREE;
+#ifdef CONFIG_SDR_WAVESHARE_43
+                mode = view_touch_mode();
+                if (mode == VIEW_TOUCH_SNAP) quantum = tune_step_hz(s_tune_step);
+#endif
+                uint32_t hz;
+                if ((mode != VIEW_TOUCH_PEAK || sdr_streaming()) &&
+                    view_touch_frequency(mode == VIEW_TOUCH_PEAK ? touch_x0 : x,
+                                         y, sdr_freq(), quantum, mode, &hz)) {
+                    retune(hz);
+                    draw_header(-1);
+                }
             }
         }
         down = false;
@@ -533,7 +644,7 @@ static void poll_touch(const touch_cal_t *cal)
     touch_cal_map(cal, rx, ry, &px, &py);
     if (!down) { down = true; n = 0; return; }       /* landing sample: drop it */
     if (n++ == 0) {                                   /* press */
-        x = px; y = py;
+        x = px; y = py; touch_x0 = x;
         if (s_mscan) {                                /* the first touch only stops a scan */
             mscan_stop();
             where = 5;
@@ -543,7 +654,10 @@ static void poll_touch(const touch_cal_t *cal)
         } else if (s_scan) {
             where = 4;
             scan_view_touch(SV_PRESS, x, y);
-        } else if (y < view_tune_y()) {
+        } else if (s_sensor) {
+            where = 9;
+            sensor_view_touch(SENSOR_PRESS, x, y);
+        } else if (y < view_tune_y() || (!s_panel && view_button_at(x, y) >= 0)) {
             where = 0;
             act = view_button_at(x, y);
             if (act >= 0) { do_action(act); next_repeat = now + 450000; }
@@ -567,7 +681,7 @@ static void poll_touch(const touch_cal_t *cal)
         } else if (view_audio_overlay_at(x, y)) {
             where = 5;                       /* label/padding: never retune underneath */
         } else {
-            where = 2;
+            where = y >= view_tune_y() && y < view_spectrum_bottom() ? 2 : 5;
         }
         return;
     }
@@ -575,6 +689,7 @@ static void poll_touch(const touch_cal_t *cal)
     y = (y + py) / 2;
     if (where == 3) adsb_view_touch(AV_MOVE, x, y);
     else if (where == 4) scan_view_touch(SV_MOVE, x, y);
+    else if (where == 9) sensor_view_touch(SENSOR_MOVE, x, y);
     else if (where == 1) panel_event(PANEL_MOVE, x, y, now);
     else if (where == 7) {
         int hot = view_mode_button_at(x, y) == act ? act : -1;
@@ -716,6 +831,7 @@ static void adsb_mode(const touch_cal_t *cal)
             busy += esp_timer_get_time() - t0;
         }
         int64_t now = esp_timer_get_time();
+        audio_settings_try_save(false);
         if (n < BUF || now - t_yield > 50000) { vTaskDelay(1); t_yield = now; }
         if (now - t_touch > 20000) {
             t_touch = now;
@@ -766,6 +882,125 @@ static void adsb_mode(const touch_cal_t *cal)
     sdr_start();
     audio_pause(false);
     view_set_theme(view_theme());              /* clears the screen */
+    apply_view();
+    draw_header(-1);
+    view_axis(sdr_freq());
+}
+
+/* Opt-in foreground decoder: reuse this USB owner's 2.4 MS/s CU8 IQ ring.
+ * The waterfall and audio reader pause, but the USB task and its driver stay
+ * untouched. Do not report a named protocol as support for other sensors. */
+static void sensor_mode(const touch_cal_t *cal)
+{
+    if (!sdr_streaming()) return; /* the outer loop owns stream recovery */
+    if (sdr_sample_rate() != SDR_SAMPLE_RATE || sdr_direct_mode() != 0 ||
+        !sensor_pipeline_init(&s_sensor_pipeline, SDR_SAMPLE_RATE)) {
+        ESP_LOGW(TAG, "sensors need the 2.4 MS/s tuner IQ path");
+        return;
+    }
+    const uint32_t previous_freq = sdr_freq();
+    settings_maybe_save(true); /* never persist the sensor center as receiver frequency */
+    audio_settings_try_save(true);
+    ESP_LOGI(TAG, "WH2 / Steelmate foreground decoder: 433.92 MHz");
+    audio_pause(true);
+    if (!audio_wait_paused(250)) {
+        audio_pause(false);
+        ESP_LOGW(TAG, "audio task did not pause; sensor tune cancelled");
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(40)); /* let the codec's queued I2S DMA finish */
+    sdr_set_freq(433920000);
+    vTaskDelay(pdMS_TO_TICKS(20)); /* discard the tuner transition and queued old IQ */
+    uint64_t pos = sdr_total_bytes(), dropped = 0;
+    sensor_view_info_t info = {.streaming = true};
+    uint64_t seen_us[SENSOR_VIEW_ROWS] = {0};
+    sensor_view_open();
+    s_sensor = true;
+    s_sensor_exit = false;
+    s_sensor_band_action = false;
+    sensor_view_draw(&info);
+    int64_t t_touch = 0, t_draw = 0, t_load = esp_timer_get_time(), t_yield = t_load, busy = 0;
+    while (sdr_streaming() && !s_sensor_exit) {
+        if (s_sensor_band_action) {
+            s_sensor_band_action = false;
+            int band = (info.band + 1) % SENSOR_BANDS;
+            sdr_set_freq(sensor_view_band_hz(band));
+            vTaskDelay(pdMS_TO_TICKS(20));
+            pos = sdr_total_bytes();
+            dropped = 0; /* per-band drops, like the reset packet counters */
+            sensor_pipeline_reset(&s_sensor_pipeline);
+            memset(&info, 0, sizeof info);
+            memset(seen_us, 0, sizeof seen_us);
+            info.band = band;
+            info.streaming = true;
+            sensor_view_draw(&info);
+        }
+        int64_t t0 = esp_timer_get_time();
+        uint64_t dropped_before = dropped;
+        size_t n = sdr_ring_read(s_iq, &pos, 32 * 1024, &dropped);
+        if (dropped != dropped_before) sensor_pipeline_reset(&s_sensor_pipeline);
+        if (n) {
+            sensor_packet_t found[8];
+            size_t count = sensor_pipeline_feed(&s_sensor_pipeline, s_iq, n, found, 8);
+            for (size_t j = 0; j < count; j++) {
+                char text[SENSOR_VIEW_LINE];
+                if (found[j].type == SENSOR_WH2) {
+                    int v = found[j].weather.temperature_tenths_c;
+                    snprintf(text, sizeof text, "WH2 %02X %s%d.%d C %u%%", found[j].weather.id,
+                             v < 0 ? "-" : "", abs(v) / 10, abs(v) % 10, found[j].weather.humidity);
+                    info.wh2++;
+                } else {
+                    const tpms_steelmate_packet_t *p = &found[j].tpms;
+                    snprintf(text, sizeof text, "TPMS %04X %.1f kPa %d C %s", p->id,
+                             p->pressure_kpa, p->temperature_c,
+                             p->alarm == TPMS_STEELMATE_FAST_LEAK ? "FAST LEAK" :
+                             p->alarm == TPMS_STEELMATE_SLOW_LEAK ? "SLOW LEAK" : "");
+                    info.tpms++;
+                }
+                memmove(info.event[1], info.event[0],
+                        (SENSOR_VIEW_ROWS - 1) * SENSOR_VIEW_LINE);
+                memmove(seen_us + 1, seen_us, (SENSOR_VIEW_ROWS - 1) * sizeof seen_us[0]);
+                seen_us[0] = (uint64_t)esp_timer_get_time();
+                snprintf(info.event[0], SENSOR_VIEW_LINE, "%s", text);
+                if (info.rows < SENSOR_VIEW_ROWS) info.rows++;
+            }
+            busy += esp_timer_get_time() - t0;
+        }
+        int64_t now = esp_timer_get_time();
+        audio_settings_try_save(false);
+        while (info.rows && sensor_event_expired(seen_us[info.rows - 1], (uint64_t)now)) {
+            info.rows--;
+            info.event[info.rows][0] = 0;
+        }
+        if (n < 32 * 1024 || now - t_yield > 50000) {
+            vTaskDelay(1); /* IDLE1 and the USB task must get scheduled */
+            t_yield = now;
+        }
+        if (now - t_touch > 20000) { t_touch = now; poll_touch(cal); }
+        if (now - t_load > 5000000) {
+            int64_t elapsed = now - t_load;
+            info.load_percent = (int)(100 * busy / elapsed);
+            info.dropped_bytes = dropped;
+            ESP_LOGI(TAG, "sensors WH2 %u Steelmate %u, decode %d%%, dropped %" PRIu64 " B",
+                     info.wh2, info.tpms, info.load_percent, dropped);
+            t_load = now;
+            busy = 0;
+        }
+        if (now - t_draw > 250000) {
+            t_draw = now;
+            info.dropped_bytes = dropped;
+            sensor_view_draw(&info);
+        }
+    }
+    s_sensor = false;
+    ESP_LOGI(TAG, "leaving sensor mode: WH2 %u, Steelmate %u, dropped %" PRIu64 " B",
+             info.wh2, info.tpms, dropped);
+    sdr_set_freq(previous_freq);
+    vTaskDelay(pdMS_TO_TICKS(40)); /* resumed reader starts 20 ms behind live IQ */
+    audio_retuned();
+    vTaskDelay(pdMS_TO_TICKS(20)); /* retune request is processed while paused */
+    audio_pause(false);
+    view_set_theme(view_theme());
     apply_view();
     draw_header(-1);
     view_axis(sdr_freq());
@@ -831,6 +1066,7 @@ static void scan_mode(const touch_cal_t *cal, int kind)
     int logged_sweeps = 0;
     while (s_sv_action != SV_EXIT) {
         int64_t now = esp_timer_get_time();
+        audio_settings_try_save(false);
         if (ok) radio_scan_poll();
         s_sv_action = SV_NONE;
         poll_touch(cal);
@@ -881,8 +1117,14 @@ void ui_run(const touch_cal_t *cal)
     panel_init();
     adsb_view_init();
     scan_view_init();
-    nvs_open("sdr", NVS_READWRITE, &s_nvs);
+    sensor_view_init();
+    esp_err_t nvs_err = nvs_open("sdr", NVS_READWRITE, &s_nvs);
+    s_nvs_ready = nvs_err == ESP_OK;
+    if (!s_nvs_ready) ESP_LOGW(TAG, "NVS open failed (%s); audio fails muted", esp_err_to_name(nvs_err));
     view_set_theme(nvs_int("theme", 0));
+    s_ctl.screen_timeout = nvs_int("screen_sec", 0);
+    if (!screen_timeout_valid(s_ctl.screen_timeout)) s_ctl.screen_timeout = 0;
+    s_screen_idle.last_touch = esp_timer_get_time();
     s_ctl.range_auto = nvs_int("rauto", 1);
     s_ctl.ref_db = nvs_int("ref", -20);
     s_ctl.range_db = nvs_int("rspan", 60);
@@ -892,8 +1134,16 @@ void ui_run(const touch_cal_t *cal)
     s_tune_step = tune_step_index(nvs_int("tstep", TUNE_STEP_DEFAULT));
     view_set_tune_step(tune_step_label(s_tune_step));
 #endif
-    s_ctl.vol = nvs_int("vol", 4);
-    s_ctl.sql = nvs_int("sql", 0);
+    audio_settings_t boot_audio = {.volume = 4, .squelch = 0, .muted = true};
+    if (s_nvs_ready) {
+        nvs_err = audio_settings_store_load(s_nvs, &boot_audio);
+        if (nvs_err != ESP_OK)
+            ESP_LOGW(TAG, "audio settings load failed (%s); starting muted", esp_err_to_name(nvs_err));
+    }
+    s_ctl.vol = boot_audio.volume;
+    s_ctl.sql = boot_audio.squelch;
+    s_muted = boot_audio.muted;
+    view_set_mute(s_muted);
     int saved_direct = nvs_int("direct", 0);
     if (saved_direct >= 0 && saved_direct <= 2 && saved_direct != sdr_direct_mode())
         sdr_set_direct_mode(saved_direct);     /* V4 rejects I/Q; normal tuner stays active */
@@ -904,25 +1154,37 @@ void ui_run(const touch_cal_t *cal)
     s_ctl.bias_error = !sdr_bias_command_ok();
     load_memories();
     apply_view();
+    audio_set_mute(s_muted); /* request is queued before the codec can output samples */
     if (audio_init()) apply_audio();
 
     draw_header(-1);
     view_axis(sdr_freq());
     sdr_start();
+    peak_wait_fresh_iq();
     audio_pause(false);
 
     int frames = 0;
     int64_t t_log = esp_timer_get_time(), t_dsp = 0, t_lcd = 0;
     uint64_t b_log = sdr_total_bytes();
     for (;;) {
+        audio_settings_try_save(false); /* also retry while the SDR is lost */
+        if (!sdr_streaming()) peak_wait_fresh_iq(); /* before touch during recovery */
+        poll_touch(cal); /* timeout/wake also work during stream loss */
         if (s_adsb_req) {
             s_adsb_req = false;
             adsb_mode(cal);
+            peak_wait_fresh_iq();
         }
         if (s_scan_req >= 0) {
             int k = s_scan_req;
             s_scan_req = -1;
             scan_mode(cal, k);
+            peak_wait_fresh_iq();
+        }
+        if (s_sensor_req) {
+            s_sensor_req = false;
+            sensor_mode(cal);
+            peak_wait_fresh_iq();
         }
         if (!sdr_streaming()) {
             static int restarts;
@@ -943,7 +1205,11 @@ void ui_run(const touch_cal_t *cal)
                 continue; /* retry cancellation; never reopen over an active RX task */
             }
             vTaskDelay(pdMS_TO_TICKS(2000));
-            while (!sdr_open(5000, NULL, 0)) vTaskDelay(pdMS_TO_TICKS(1000));
+            while (!sdr_open(5000, NULL, 0)) {
+                audio_settings_try_save(false);
+                poll_touch(cal);
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
             restarts = 0;
             view_reset();
             draw_header(-1);
@@ -954,10 +1220,13 @@ void ui_run(const touch_cal_t *cal)
         }
         int64_t t0 = esp_timer_get_time();
         int n = spectrum_size();
-        sdr_ring_latest(s_iq, IQ_PER_FRAME * 2);
+        uint64_t frame_end = sdr_ring_latest(s_iq, IQ_PER_FRAME * 2);
         spectrum_compute(s_iq, IQ_PER_FRAME / n, s_db);
         show_audio();
         view_render(s_db, n, sdr_freq());
+        if (!peak_iq_gate_ready(&s_peak_iq, frame_end, IQ_PER_FRAME * 2,
+                                SDR_SAMPLE_RATE / 25)) /* 20 ms of fresh CU8 after retune */
+            view_peak_invalidate();
         int64_t t1 = esp_timer_get_time();
         poll_touch(cal);
         if (!s_panel) view_blit_spectrum();    /* the waterfall keeps filling behind the panel */
@@ -975,7 +1244,7 @@ void ui_run(const touch_cal_t *cal)
             poll_touch(cal);
         }
         if (s_mscan) mscan_step();
-        settings_maybe_save();
+        settings_maybe_save(false);
         vTaskDelay(1);                          /* let IDLE1 run (task watchdog) */
         frames++;
         if (t2 - t_log > 5000000) {

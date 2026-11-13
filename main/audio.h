@@ -13,6 +13,7 @@ void audio_set_mute(bool on);                 /* codec mute, preserves volume an
 void audio_set_squelch(int level);           /* 0 = open, 1..9 */
 void audio_retuned(void);                    /* new station: RDS starts over */
 void audio_pause(bool on);                   /* other modes own the stream: silence, no reading */
+bool audio_wait_paused(uint32_t timeout_ms); /* UI must not retune until codec write has finished */
 bool audio_ok(void);
 bool audio_squelch_open(void);
 /* the last 5 s: demodulator time as % of real time, and the most IQ the reader was behind (ms) */
