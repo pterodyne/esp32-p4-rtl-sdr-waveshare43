@@ -30,8 +30,17 @@ Only the upper spectrum waveform accepts touch tuning; the axis and waterfall
 are inert. FREEFORM retains the previous mode/zoom rounding, SNAP rounds to
 the saved bottom-bar STEP, and PEAK looks for the nearest qualifying local
 signal within 24 pixels of the press, at least 12 dB above the visible floor.
-With no qualifying peak it leaves the receiver where it is. TOUCH mode is not
-saved across restart. The [host-rendered screenshot gallery](docs/SCREENSHOTS.md)
+With no qualifying peak it leaves the receiver where it is. TOUCH mode is saved
+immediately in NVS and restored after restart. Adjacent **GAIN** cycles the same
+AGC/nearest 15 dB/nearest 30 dB/MAX tuner presets as MENU → CONTROLS. Adjacent
+**AUTO RESET** re-enables auto range and clears the spectrum's floor estimate and
+waterfall history; the next IQ frame establishes the new vertical scale. It does
+not retune the receiver or change its gain. These new controls pass host tests
+and rev1/rev3 builds but have **not** been flashed and verified on the board.
+The battery-voltage readout is omitted: its separate experimental image lit
+the backlight without a picture on rev3; rollback to the prior app restored
+the display. No verified startup log or isolated root cause is available.
+The [host-rendered screenshot gallery](docs/SCREENSHOTS.md)
 shows these layouts; confirm actual touch and RF selection on board.
 Use the footer or **MENU → AUDIO** for 3 kHz USB/LSB reception.
 The footer **MUTE/UNMUTE** key silences the speaker without losing the saved

@@ -25,6 +25,8 @@
 #include "pins.h"
 #ifdef CONFIG_SDR_WAVESHARE_43
 #include "waveshare_geometry.h"
+#include "touch_mode_store.h"
+#include "quick_gain.h"
 #endif
 #include "sdr.h"
 #include "rtlsdr_usb.h"
@@ -91,6 +93,17 @@ static audio_save_pending_t s_audio_pending;
 static screen_idle_t s_screen_idle;
 static peak_iq_gate_t s_peak_iq;
 static int64_t s_screen_save_at;
+#ifdef CONFIG_SDR_WAVESHARE_43
+static int64_t s_touch_save_at;
+static void touch_mode_try_save(void)
+{
+    int64_t now = esp_timer_get_time();
+    if (!s_touch_save_at || now < s_touch_save_at) return;
+    esp_err_t err = touch_mode_store_save_reopening(&s_nvs_ready, &s_nvs, view_touch_mode());
+    s_touch_save_at = err == ESP_OK ? 0 : now + 5000000;
+    if (err != ESP_OK) ESP_LOGW(TAG, "TOUCH save failed (%s); retry in 5 s", esp_err_to_name(err));
+}
+#endif
 static void screen_settings_try_save(void)
 {
     int64_t now = esp_timer_get_time();
@@ -436,7 +449,26 @@ static void do_action(int act)
 #ifdef CONFIG_SDR_WAVESHARE_43
     if (act == VIEW_TOUCH_MODE) {
         view_set_touch_mode((view_touch_mode() + 1) % (VIEW_TOUCH_PEAK + 1));
-        draw_header(act);                   /* ephemeral mode; never changes saved STEP */
+        s_touch_save_at = esp_timer_get_time();
+        touch_mode_try_save();              /* survive an immediate battery-switch power cut */
+        draw_header(act);
+        return;
+    }
+    if (act == VIEW_AGC_CYCLE) {
+        int next = quick_gain_next(sdr_gain_index(), sdr_gain_presets(), sdr_gain_tenths);
+        sdr_set_gain_index(next);
+        s_ctl.gain_idx = sdr_gain_index();
+        settings_changed();
+        draw_header(act);
+        return;
+    }
+    if (act == VIEW_RANGE_RESET) {
+        s_ctl.range_auto = true;
+        view_set_range(true, s_ctl.ref_db, s_ctl.range_db);
+        view_reset();                       /* discard old scale/floor and waterfall history */
+        peak_wait_fresh_iq();               /* Peak waits for a new frame after the reset */
+        settings_changed();
+        draw_header(act);
         return;
     }
     if (act == VIEW_STEP) {
@@ -582,6 +614,7 @@ static void poll_touch(const touch_cal_t *cal)
     bool contact = xpt2046_read_raw(&rx, &ry, &rz);
     screen_settings_try_save();
 #ifdef CONFIG_SDR_WAVESHARE_43
+    touch_mode_try_save();
     int screen_action = screen_idle_update(&s_screen_idle, s_ctl.screen_timeout, now, contact);
     if (screen_action & (SCREEN_SLEEP | SCREEN_WAKE)) {
         esp_err_t err = rpi_lcd_set_display_on(!(screen_action & SCREEN_SLEEP));
@@ -1133,6 +1166,7 @@ void ui_run(const touch_cal_t *cal)
 #ifdef CONFIG_SDR_WAVESHARE_43
     s_tune_step = tune_step_index(nvs_int("tstep", TUNE_STEP_DEFAULT));
     view_set_tune_step(tune_step_label(s_tune_step));
+    view_set_touch_mode(touch_mode_loaded(nvs_int("touchmode", VIEW_TOUCH_FREE)));
 #endif
     audio_settings_t boot_audio = {.volume = 4, .squelch = 0, .muted = true};
     if (s_nvs_ready) {

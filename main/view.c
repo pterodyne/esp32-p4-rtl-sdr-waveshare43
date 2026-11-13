@@ -458,7 +458,11 @@ static void layout(void)
     const int y = T->btn_y, h = T->btn_h;
     memset(s_btn, 0, sizeof s_btn);
 #ifdef CONFIG_SDR_WAVESHARE_43
-    s_btn[VIEW_TOUCH_MODE] = (button_t){4, y, 74, h, NULL};
+    s_btn[VIEW_TOUCH_MODE] = (button_t){4, y, LCD_PORTRAIT ? 66 : 74, h, NULL};
+    s_btn[VIEW_AGC_CYCLE] = (button_t){LCD_PORTRAIT ? 74 : 82, y,
+                                      LCD_PORTRAIT ? 48 : 60, h, NULL};
+    s_btn[VIEW_RANGE_RESET] = (button_t){LCD_PORTRAIT ? 126 : 146, y,
+                                        LCD_PORTRAIT ? 52 : 72, h, NULL};
     int row_y = LCD_H - TUNE_BAR_H + 3;
     s_btn[VIEW_DN1M] = (button_t){4, row_y, 86, TUNE_BAR_H - 6, "<"};
     s_btn[VIEW_STEP] = (button_t){96, row_y, LCD_W - 192, TUNE_BAR_H - 6, s_step_text};
@@ -466,7 +470,7 @@ static void layout(void)
     s_btn[VIEW_GAIN] = (button_t){LCD_W - 62, y, 56, h, NULL};
     s_hdr_h = T->hdr_h;
     s_spec_h = T->spec_h + (LCD_PORTRAIT ? PORT_SPEC : 0);
-    s_ro_x0 = 82; s_ro_x1 = LCD_W - 70;
+    s_ro_x0 = LCD_PORTRAIT ? 180 : 82; s_ro_x1 = LCD_W - 70;
     return;
 #else
     if (!LCD_PORTRAIT) {
@@ -694,6 +698,17 @@ void view_header(uint32_t freq, const char *gain, int pressed)
             const char *name = names[s_touch_mode];
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(name, 1)) / 2,
                         b->y + b->h - 17, name, btn_text(on), 1);
+        } else if (i == VIEW_AGC_CYCLE || i == VIEW_RANGE_RESET) {
+            const char *title = i == VIEW_AGC_CYCLE ? "GAIN" : "AUTO";
+            char short_gain[8];
+            if (gain[0] >= '0' && gain[0] <= '9')
+                snprintf(short_gain, sizeof short_gain, "%ddB", atoi(gain));
+            else snprintf(short_gain, sizeof short_gain, "%s", gain);
+            const char *sub = i == VIEW_AGC_CYCLE ? short_gain : "RESET";
+            rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(title, 1)) / 2,
+                        b->y + 1, title, btn_text(on), 1);
+            rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(sub, 1)) / 2,
+                        b->y + b->h - 17, sub, btn_text(on), 1);
         } else if (i == VIEW_GAIN) {             /* opens Controls; shows the gain underneath */
             int ty = b->y + (b->h - 32) / 2;
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w("MENU", 1)) / 2, ty, "MENU", btn_text(on), 1);

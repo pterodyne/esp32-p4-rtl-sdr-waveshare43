@@ -60,7 +60,16 @@ uses the prior mode/zoom-dependent increments; SNAP rounds to the nearest
 multiple of the selected bottom-bar **STEP**. PEAK takes the nearest strong
 local maximum within 24 screen columns of the press (at least 12 dB above
 the displayed noise floor); if none qualifies, it does **not** retune. The
-TOUCH mode is temporary and resets to FREEFORM on restart; STEP remains saved.
+TOUCH mode is saved immediately to NVS and restored after restart (as is STEP).
+Immediately beside TOUCH, **GAIN** cycles the existing tuner presets AGC →
+nearest 15 dB → nearest 30 dB → MAX → AGC; the second line shows the active
+gain. **AUTO RESET** beside it turns auto range back on and resets the spectrum
+noise-floor estimate and waterfall history so the next IQ frame re-scales the
+trace. The receiver frequency and gain are not changed by AUTO RESET. The
+battery-voltage readout is deliberately absent from this build: the separate
+experimental battery image lit the backlight but showed no picture on the
+user's rev3 board; the previous firmware restored the display. Its root cause
+has not been established. Do not flash that experimental image as an upgrade.
 Host tests cover all looks in landscape/portrait, but physical touch accuracy
 and signal selection are not yet board-verified.
 

@@ -918,6 +918,35 @@ static void test_sensor_entry(void)
     puts("SCAN > SENSORS entry touch hits in landscape and portrait");
 }
 
+static void test_quick_header(void)
+{
+#ifdef CONFIG_SDR_WAVESHARE_43
+    view_init(RATE);
+    for (int portrait = 0; portrait < 2; portrait++) {
+        rpi_lcd_set_portrait(portrait != 0);
+        for (int look = 0; look < view_themes(); look++) {
+            view_set_theme(look);
+            int y = 17;
+            int touch = portrait ? 37 : 41;
+            int gain = portrait ? 98 : 112;
+            int reset = portrait ? 151 : 182;
+            assert(view_button_at(touch, y) == VIEW_TOUCH_MODE);
+            assert(view_button_at(gain, y) == VIEW_AGC_CYCLE);
+            assert(view_button_at(reset, y) == VIEW_RANGE_RESET);
+            assert(view_button_at(LCD_W / 2, y) == -1); /* frequency remains inert */
+            assert(view_button_at(LCD_W - 34, y) == VIEW_GAIN); /* MENU remains */
+            view_header(142000100, "AGC", -1);
+            uint32_t baseline = crc32(0, (const Bytef *)fb, LCD_W * 40 * sizeof fb[0]);
+            view_header(142000100, "AGC", VIEW_AGC_CYCLE);
+            assert(crc32(0, (const Bytef *)fb, LCD_W * 40 * sizeof fb[0]) != baseline);
+            view_header(142000100, "AGC", VIEW_RANGE_RESET);
+            assert(crc32(0, (const Bytef *)fb, LCD_W * 40 * sizeof fb[0]) != baseline);
+        }
+    }
+#endif
+    puts("top-left TOUCH/GAIN/RANGE keys and inert frequency in every layout/look");
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 2 && !strcmp(argv[1], "--settings-snapshot")) {
@@ -962,6 +991,7 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "--test-ism")) { test_ism_bands(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-screen")) { test_screen_settings(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-sensors")) { test_sensor_entry(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "--test-quick-header")) { test_quick_header(); return 0; }
     if (argc > 2 && !strcmp(argv[1], "--audio-snapshot")) {
         static float db[1024];
         bool portrait = false, phosphor = false;

@@ -10,6 +10,12 @@ for name in audio_mute audio_pause_gate audio_save_pending bias_state sensor_eve
     ${CC:-cc} $flags "tests/${name}_test.c" -o "$out/$name"
     "$out/$name"
 done
+for name in touch_mode_store quick_gain; do
+    ${CC:-cc} $flags "tests/${name}_test.c" -o "$out/$name"
+    "$out/$name"
+done
+python3 tests/touch_mode_contract_test.py
+python3 tests/quick_controls_contract_test.py
 for name in tune_step theme_store audio_settings_store rf_policy weather_wh2 tpms_steelmate; do
     ${CC:-cc} $flags "tests/${name}_test.c" "main/${name}.c" -lm -o "$out/$name"
     "$out/$name"
@@ -53,7 +59,7 @@ for board in original waveshare43; do
     if [ "$board" = waveshare43 ]; then define='-DCONFIG_SDR_WAVESHARE_43'; fi
     ${CC:-cc} -O2 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-field-initializers \
         $define -Itools/preview/stub -I"$D/include" -I"$D" -Imain $sources -lz -lm -o "$out/preview-$board"
-    for test in audio bands theme phosphor footer-recovery rf ism sensors screen touch-tuning; do
+    for test in audio bands theme phosphor footer-recovery rf ism sensors screen touch-tuning quick-header; do
         "$out/preview-$board" "--test-$test"
     done
 done
