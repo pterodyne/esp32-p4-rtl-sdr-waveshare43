@@ -32,5 +32,9 @@ This is a living list of possible work, not a claim that all features are implem
 
 ## Release gates
 
+- User reports FM reception and the changes tried so far working on the rev3
+  setup. HF reception has not yet been observed, with mostly indoor use and a
+  marginal antenna reported; revisit it with a suitable antenna and known
+  signal. This is not a confirmed software fault or a successful HF test.
 - Host DSP/UI/protocol tests and ESP-IDF rev1/rev3 builds/checksums are required, but do not establish real packet decoding or RF sensitivity.
 - Verify the rev3 board's audio, controls, SDR reception, decoder hit rate and error recovery with a suitable signal source before a hardware-support claim. Preserve upstream attribution and provide source/licensing notices alongside any redistributed firmware.

@@ -10,6 +10,18 @@ attribution and GPL-3.0 license remain. GitHub currently still labels this
 repository a fork; leaving the fork network is a separate, irreversible
 GitHub account action that removes pull-request and other repository metadata.
 
+## Waveshare UI previews
+
+![Host-rendered Waveshare Freeform receiver preview](docs/images/waveshare-main-freeform.png)
+
+See the [seven-image screenshot gallery](docs/SCREENSHOTS.md) for Freeform,
+Snap and Peak touch modes, portrait layout, timeout settings and sensor screens.
+These are **host-rendered previews with synthetic RF**, not photographs or proof
+of live reception. The firmware is available as an
+[RC3 pre-release](https://github.com/pterodyne/esp32-p4-rtl-sdr-waveshare43/releases/tag/waveshare43-touch-rc3).
+The user's initial board tests are positive, but touch Peak accuracy and live
+sensor decoding have not been separately confirmed on physical hardware.
+
 The inherited application includes a spectrum/waterfall receiver, AM/FM audio,
 RDS, ADS-B aircraft display, channel memories, microSD logging, and Wi-Fi/BLE
 scanning through the on-board ESP32-C6. Features beyond the display have not
@@ -52,17 +64,12 @@ TOUCH mode is temporary and resets to FREEFORM on restart; STEP remains saved.
 Host tests cover all looks in landscape/portrait, but physical touch accuracy
 and signal selection are not yet board-verified.
 
-![Host-rendered Waveshare receiver in Freeform mode](docs/images/waveshare-main-freeform.png)
-
-These are **host-rendered previews with synthetic RF**, not photos or live
-reception results. See the [screenshot gallery](docs/SCREENSHOTS.md) for all
-three touch modes, portrait layout, timeout settings and the sensor screens.
-
 The older floating audio controls were reported to flicker on hardware, and
 the interface was reported to flash every few seconds. The static footer and
-bounded waterfall pass host tests and cross-builds, but **their on-board effect
-is not yet confirmed**; if flashing remains, capture the UART log around the
-event (especially stream restart and USB error messages). **Set SQL to OPEN
+bounded waterfall pass host tests and cross-builds; the user reports the changes
+tried so far work well on the board, but the earlier periodic flashing was not
+separately measured. If flashing remains, capture the UART log around the event
+(especially stream restart and USB error messages). **Set SQL to OPEN
 (0) for SSB**: its nonzero power-based squelch may mute speech and does not
 discriminate sidebands.
 
@@ -143,8 +150,13 @@ new timeout and bottom controls on the board before a hardware-support claim.
 
 | Image | P4 revision | Status on this board |
 | --- | --- | --- |
-| `p4-sdr-waveshare43-rev3.bin` | v3.1 and newer | **User-flashed older image:** display, RTL-SDR on J3 with USB-supplied power and no battery, and four-way rotation worked. The old floating controls flickered; the new footer and SSB have not yet been verified on board. |
+| `p4-sdr-waveshare43-rev3.bin` | v3.1 and newer | **User report:** FM reception works and the UI/control changes tried so far are working well. The exact image version and each individual control were not independently instrumented; HF reception has not yet been confirmed. |
 | `p4-sdr-waveshare43-rev1.bin` | v1.x | Cross-compiled; not tested on this board. |
+
+The user has not picked up an HF signal yet, while testing mostly indoors with
+a marginal antenna. This does **not** establish an HF firmware defect or prove
+the receiver's HF path; check with a suitable antenna and known signal when
+practical. FM success does not validate HF reception or the live sensor formats.
 
 **Battery-power limitation (user report):** with the RTL-SDR connected via J3,
 the board browns out when running from its battery. The same setup works with

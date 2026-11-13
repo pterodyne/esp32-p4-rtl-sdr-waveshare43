@@ -1,5 +1,7 @@
 # Waveshare 4.3-inch UI previews
 
+The illustrated firmware is available in the
+[RC3 pre-release](https://github.com/pterodyne/esp32-p4-rtl-sdr-waveshare43/releases/tag/waveshare43-touch-rc3).
 These PNGs are **host-rendered examples from `tools/preview`**, not photos of a
 board and not proof of live RTL-SDR reception. The receiver waveform/waterfall
 is synthetic; the 433.92 MHz sensor example uses illustrative fixture-derived
