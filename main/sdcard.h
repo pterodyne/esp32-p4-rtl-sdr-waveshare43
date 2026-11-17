@@ -7,7 +7,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef SDCARD_ROOT
 #define SDCARD_ROOT "/sd"
+#endif
 
 /* Counted: each true return needs one sdcard_unmount(). False if there is no card. */
 bool sdcard_mount(void);

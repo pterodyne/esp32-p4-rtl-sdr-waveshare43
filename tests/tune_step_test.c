@@ -15,6 +15,8 @@ int main(void)
         assert(tune_step_label(i) && tune_step_label(i)[0]);
         static const int next[] = {1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 9, 0};
         assert(tune_step_next(i) == next[i]);
+        assert(tune_step_previous(tune_step_next(i)) == i);
+        assert(tune_step_next(tune_step_previous(i)) == i);
     }
     assert(!strcmp(tune_step_label(5), "12.5k"));
     assert(tune_step_index(-1) == TUNE_STEP_DEFAULT);

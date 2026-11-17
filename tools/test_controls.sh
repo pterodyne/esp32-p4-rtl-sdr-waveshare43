@@ -10,16 +10,22 @@ for name in audio_mute audio_pause_gate audio_save_pending bias_state sensor_eve
     ${CC:-cc} $flags "tests/${name}_test.c" -o "$out/$name"
     "$out/$name"
 done
-for name in touch_mode_store quick_gain; do
+for name in battery_voltage touch_mode_store quick_gain; do
     ${CC:-cc} $flags "tests/${name}_test.c" -o "$out/$name"
     "$out/$name"
 done
+${CC:-cc} -O2 -Wall -Wextra -Werror -Wno-unused-parameter -Itests/battery_host -Imain tests/battery_worker_test.c -o "$out/battery-worker"
+"$out/battery-worker"
+python3 tests/battery_route_test.py
 python3 tests/touch_mode_contract_test.py
 python3 tests/quick_controls_contract_test.py
 for name in tune_step theme_store audio_settings_store rf_policy weather_wh2 tpms_steelmate; do
     ${CC:-cc} $flags "tests/${name}_test.c" "main/${name}.c" -lm -o "$out/$name"
     "$out/$name"
 done
+${CC:-cc} $flags tests/hf_diag_test.c main/hf_diag.c -o "$out/hf_diag"
+"${out}/hf_diag"
+python3 tests/hf_diag_route_test.py
 python3 tests/ui_audio_recovery_test.py
 python3 tests/ui_controls_contract_test.py
 # Guard the firmware touch route as well as the preview's real view/FFT math.
@@ -53,13 +59,13 @@ assert 'mode == VIEW_TOUCH_PEAK ? touch_x0 : x' in release
 print('UI touch route: spectrum press/release, mode cycle, saved STEP, Peak press anchor')
 PY
 D=components/rpi_display
-sources="tools/preview/preview.c main/view.c main/panel.c main/adsb.c main/adsb_view.c main/amap.c main/scan_view.c main/sensor_view.c main/spectrum.c $D/rpi_canvas.c $D/rpi_text.c"
+sources="tools/preview/preview.c main/view.c main/panel.c main/hf_diag.c main/adsb.c main/adsb_view.c main/amap.c main/scan_view.c main/sensor_view.c main/spectrum.c $D/rpi_canvas.c $D/rpi_text.c"
 for board in original waveshare43; do
     define=''
     if [ "$board" = waveshare43 ]; then define='-DCONFIG_SDR_WAVESHARE_43'; fi
     ${CC:-cc} -O2 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-field-initializers \
         $define -Itools/preview/stub -I"$D/include" -I"$D" -Imain $sources -lz -lm -o "$out/preview-$board"
-    for test in audio bands theme phosphor footer-recovery rf ism sensors screen touch-tuning quick-header range-reset-waterfall; do
+    for test in audio bands theme phosphor footer-recovery rf hf-diag ism sensors screen touch-tuning quick-header range-reset-waterfall sd-audio; do
         "$out/preview-$board" "--test-$test"
     done
 done

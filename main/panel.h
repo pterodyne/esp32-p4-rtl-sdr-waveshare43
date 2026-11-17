@@ -16,6 +16,8 @@
  * No ESP-IDF calls (tools/preview builds it). */
 #include <stdbool.h>
 #include <stdint.h>
+#include "hf_diag.h"
+#include "sd_audio.h"
 
 #define PANEL_ZOOMS 4
 #define PANEL_BWS   6
@@ -39,6 +41,11 @@ typedef struct {
     uint32_t mem_hz[PANEL_MEMS];             /* channel memories, 0 = empty */
     int8_t mem_bw[PANEL_MEMS];               /* their filter index */
     int mem;                                 /* with CTL_MEM_*: the slot */
+    sd_audio_snapshot_t sd_audio;
+    int audio_file;
+    char audio_selected_name[SD_AUDIO_NAME]; /* full basename frozen by row selection */
+    char audio_delete_name[SD_AUDIO_NAME]; /* frozen confirmation identity, never display text */
+    hf_diag_state_t hf_diag;                /* read-only snapshot; never saved to NVS */
 } ctl_t;
 
 enum { CTL_GAIN = 1, CTL_RANGE = 2, CTL_ZOOM = 4, CTL_BW = 8, CTL_BAND = 16, CTL_CLOSE = 32,
@@ -49,11 +56,15 @@ enum { CTL_GAIN = 1, CTL_RANGE = 2, CTL_ZOOM = 4, CTL_BW = 8, CTL_BAND = 16, CTL
        CTL_MEM_SAVE = 2048,                  /* c->freq and c->bw stored in slot c->mem */
        CTL_MEM_TUNE = 4096,                  /* tune slot c->mem (the panel stays as is) */
        CTL_MEM_SCAN = 8192, CTL_BIAS = 16384, CTL_DIRECT = 32768,
+       CTL_SD_DELETE = 16777216, CTL_SD_NEXT = 4194304, CTL_SD_PREV = 8388608, CTL_SD_REFRESH = 262144, CTL_SD_RECORD = 524288, CTL_SD_PLAY = 1048576, CTL_SD_STOP = 2097152,
        CTL_SCREEN = 131072, CTL_SENSOR = 65536 };                /* foreground narrow WH2 + Steelmate, selectable RF center */
 enum { PANEL_PRESS, PANEL_MOVE, PANEL_RELEASE };
 
 void panel_init(void);
 void panel_open(const ctl_t *c);             /* menu page, whole panel drawn */
+void panel_open_presets(const ctl_t *c);
+void panel_open_recordings(const ctl_t *c);
+bool panel_recordings_visible(void);
 void panel_redraw(const ctl_t *c);           /* same page again (after a look change) */
 void panel_open_memory(const ctl_t *c, bool save);   /* straight to MEMORY (or SAVE) */
 /* Touch event at (x, y), screen coordinates, now_us for key repeat. Changes c, redraws what

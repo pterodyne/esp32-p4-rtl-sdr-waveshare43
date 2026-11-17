@@ -1,0 +1,1 @@
+#define CONFIG_SDR_WAVESHARE_43 1

@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include "hf_diag.h"
 
 #define SDR_SAMPLE_RATE 2400000
 
@@ -17,6 +18,8 @@ bool sdr_streaming(void);        /* false once the stream died (dongle unplugged
 
 void sdr_set_freq(uint32_t hz);
 uint32_t sdr_freq(void);
+/* Snapshot of USB identity and last HF/VHF command observations, not RF proof. */
+hf_diag_state_t sdr_hf_diag_snapshot(void);
 /* Gain steps: index 0 = tuner AGC, then every gain the tuner offers (29 on the R828D). */
 int sdr_gain_presets(void);
 int sdr_gain_index(void);

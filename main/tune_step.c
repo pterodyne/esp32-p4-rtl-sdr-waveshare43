@@ -20,6 +20,13 @@ int tune_step_next(int i)
     static const int next[TUNE_STEP_COUNT] = {1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 9, 0};
     return next[valid_index(i)];
 }
+int tune_step_previous(int i)
+{
+    int target = valid_index(i);
+    for (int p = 0; p < TUNE_STEP_COUNT; p++)
+        if (tune_step_next(p) == target) return p;
+    return TUNE_STEP_DEFAULT;
+}
 uint32_t tune_step_offset(uint32_t freq, int i, int direction)
 {
     uint32_t step = tune_step_hz(i);

@@ -12,10 +12,15 @@
 #include "spectrum.h"
 
 enum { VIEW_DN1M, VIEW_DN100K, VIEW_UP100K, VIEW_UP1M, VIEW_DN100, VIEW_UP100,
-       VIEW_STEP, VIEW_GAIN, VIEW_THEME, VIEW_TOUCH_MODE, VIEW_AGC_CYCLE, VIEW_RANGE_RESET, VIEW_NBTN,
+       VIEW_STEP, VIEW_GAIN, VIEW_THEME, VIEW_TOUCH_MODE, VIEW_AGC_CYCLE, VIEW_RANGE_RESET,
+       VIEW_STEP_DOWN, VIEW_ZOOM_TOGGLE, VIEW_PRESETS, VIEW_PLAY, VIEW_RECORD, VIEW_NBTN,
        VIEW_VOL_DN, VIEW_VOL_UP, VIEW_SQL_DN, VIEW_SQL_UP, VIEW_MODE_0,
        VIEW_ZOOM_DN = VIEW_MODE_0 + 6, VIEW_ZOOM_UP, VIEW_MUTE };
 enum { VIEW_TOUCH_FREE, VIEW_TOUCH_SNAP, VIEW_TOUCH_PEAK };
+static inline bool view_header_repeats(int act)
+{
+    return act >= 0 && act < VIEW_GAIN && act != VIEW_STEP;
+}
 
 void view_init(uint32_t sample_rate);        /* allocates the frame buffers, aborts if out of memory */
 int view_themes(void);
@@ -38,6 +43,7 @@ void view_set_passband(uint32_t hz);         /* shaded filter width around the c
 void view_set_sideband(int side);            /* -1 LSB, 0 symmetric, +1 USB */
 void view_set_fine_tune(bool fine);          /* show the 100 Hz digit for SSB or a 100 Hz step */
 void view_set_tune_step(const char *label);  /* Waveshare header selected step indicator */
+void view_set_zoom_cycle(int zoom);          /* Waveshare header ZOOM key: current preset (0..PANEL_ZOOMS-1) */
 void view_set_touch_mode(int mode);          /* ephemeral; defaults to Freeform */
 int view_touch_mode(void);
 void view_peak_invalidate(void);              /* retune/stream loss: old FFT is not a current carrier */
@@ -51,6 +57,7 @@ void view_set_audio(const char *label, bool live);
 /* Persistent footer below the waterfall: mode choices and volume/squelch steppers. */
 void view_audio_controls(int vol, int sql, int bw, int zoom, int pressed);
 void view_set_mute(bool muted);              /* preserved volume, fixed-footer mute indication */
+void view_set_recording(bool active);
 void view_footer_invalidate(void);             /* after a full-screen menu obscures the footer */
 int view_audio_button_at(int x, int y);       /* mute and the four +/- keys; -1 elsewhere */
 int view_mode_button_at(int x, int y);        /* VIEW_MODE_0 + filter index, or -1 */

@@ -45,8 +45,11 @@ and **SQL −/+** on the right. Mute silences the speaker without changing the
 saved volume or stopping the RF stream; tap again to restore the same level.
 Hold the volume/squelch keys to repeat (mute is a single toggle). Volume ranges from
 0 (off) to 10 and squelch from 0 (open) to 9; **MENU → AUDIO** also offers
-these modes and settings. The two arrows on the **bottom tuning bar** tune by the increment shown on
-the highlighted **STEP** button. Tap STEP to cycle **100 Hz, 1, 5, 9, 10, 12.5,
+these modes and settings. The header **ZOOM** key after GAIN cycles **2.4 MHz → 1.2 MHz → 600 kHz → 300 kHz → 2.4 MHz**; footer zoom +/- controls are removed. Capture stays at **2.4 MS/s**. FFT size is capped at **4096**, so 300 kHz does not improve FFT resolution beyond 600 kHz. This is host-tested, not hardware-verified.
+
+The two arrows on the **bottom tuning bar** tune by the increment shown on
+the split **STEP** selector. Its left half cycles down and its right half cycles up
+through **100 Hz, 1, 5, 9, 10, 12.5,
 25, 50, 100, 500 kHz, 1 MHz and 5 MHz**; hold either arrow to repeat. The chosen step is
 saved; existing saved step IDs retain their original increments. The frequency readout shows the 100 Hz digit when needed; tune SSB to
 the suppressed-carrier frequency. Phosphor now uses only the green
@@ -61,15 +64,18 @@ multiple of the selected bottom-bar **STEP**. PEAK takes the nearest strong
 local maximum within 24 screen columns of the press (at least 12 dB above
 the displayed noise floor); if none qualifies, it does **not** retune. The
 TOUCH mode is saved immediately to NVS and restored after restart (as is STEP).
-Immediately beside TOUCH, **GAIN** cycles the existing tuner presets AGC →
-nearest 15 dB → nearest 30 dB → MAX → AGC; the second line shows the active
-gain. **AUTO RESET** beside it turns auto range back on and resets the spectrum
+The header order is **TOUCH → AUTO RESET → GAIN → ZOOM → PRESETS → ● REC → ▶ PLAY → MENU**, with battery voltage on the separate frequency/readout row. PRESETS opens the existing BAND list; the red REC circle records live demodulated audio directly on the receiver and becomes a red STOP square while recording. PLAY opens SD listening-audio recordings, finalizes any live recording, and suppresses live RF audio for the entire page (including idle/STOP/EOF/errors), without globally muting WAV output. Leaving restores the unchanged user mute/volume state. See [SD audio](docs/SD-AUDIO.md).
+GAIN cycles AGC → nearest 0 dB → nearest 15 dB → nearest 30 dB → nearest 40 dB
+→ MAX → AGC using the existing receiver gain table (duplicate targets are skipped);
+the second line shows the active gain. Both orientations put the frequency on a
+second header row to avoid overlap; battery is on that row and MENU remains on the top button bar. **AUTO RESET** turns auto range back on and resets the spectrum
 noise-floor estimate and waterfall history so the next IQ frame re-scales the
 trace. The receiver frequency and gain are not changed by AUTO RESET. The
-battery-voltage readout is deliberately absent from this build: the separate
-experimental battery image lit the backlight but showed no picture on the
-user's rev3 board; the previous firmware restored the display. Its root cause
-has not been established. Do not flash that experimental image as an upgrade.
+battery field shows calibrated **BAT x.xxV**, with rough green/amber/red voltage
+bands, or **BAT --.--V** if measurement is unavailable. It is not a fuel gauge
+or charging-state indicator; displayed precision is not guaranteed accuracy.
+See [battery implementation and limits](docs/TOPBAR-BATTERY-REPORT.md). See
+[SD listening-audio recording/playback](docs/SD-AUDIO.md) for controls, formats and limits.
 Host tests cover all looks in landscape/portrait, but physical touch accuracy
 and signal selection are not yet board-verified.
 
@@ -98,6 +104,10 @@ path uses a built-in upconverter instead of direct sampling; simply tune the
 V4 to the HF frequency in TUNER mode. On other dongles, I/Q only works if the
 corresponding ADC input is physically wired. Direct mode, unlike Bias-T, is
 saved and reapplied after device reopen. See the [V4 user's guide](https://www.rtl-sdr.com/v4/).
+A local, unflashed [HF on-screen diagnostic](docs/HF-ONSCREEN-DIAG.md) is available under
+**MENU → RF INPUT → HF DIAG**; it records tune/PLL/GPIO5 command evidence without
+claiming measured RF switching. Use its rev3 **full-image at `0x0`** instructions,
+not an app-only flash, which previously yielded a blank display on this board.
 
 **MENU → BAND** includes North American receive presets at 315 MHz and
 345 MHz (low-power Part 15 devices), 433.92 MHz (the existing 433/70CM slot),

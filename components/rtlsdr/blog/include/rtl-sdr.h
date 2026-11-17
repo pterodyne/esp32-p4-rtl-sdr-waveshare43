@@ -150,6 +150,14 @@ RTLSDR_API int rtlsdr_read_eeprom(rtlsdr_dev_t *dev, uint8_t *data,
 				  uint8_t offset, uint16_t len);
 
 RTLSDR_API int rtlsdr_set_center_freq(rtlsdr_dev_t *dev, uint32_t freq);
+/* Last R82xx tune attempt. GPIO5 level is a requested output, not a measured
+ * pin voltage or RF switch position. -1 for unavailable PLL observation. */
+typedef struct {
+    int pll; /* -1 unknown, 0 unlocked, 1 locked */
+    int gpio5_attempted, gpio5_rc, gpio5_level;
+    uint32_t tuner_hz, lo_hz; /* computed tune-path values, not register readback */
+} rtlsdr_r82xx_tune_diag_t;
+RTLSDR_API int rtlsdr_get_r82xx_tune_diag(rtlsdr_dev_t *dev, rtlsdr_r82xx_tune_diag_t *out);
 
 /*!
  * Get actual frequency the device is tuned to.
