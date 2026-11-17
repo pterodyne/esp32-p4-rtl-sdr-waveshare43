@@ -3,6 +3,8 @@
  *
  * Build: make -C tools/preview */
 #include <math.h>
+static int preview_battery_mv = -1;
+int battery_voltage_get(void) { return preview_battery_mv; }
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +12,7 @@
 #include <string.h>
 #include <zlib.h>
 #include "rpi_lcd.h"
+#include "rpi_text.h"
 #include "pins.h"
 #include "spectrum.h"
 #include "view.h"
@@ -19,6 +22,8 @@
 #include "amap.h"
 #include "scan_view.h"
 #include "sensor_view.h"
+#include "screen_idle.h"
+#include "waveshare_geometry.h"
 
 #define RATE 2400000
 #define NAVG 24
@@ -401,8 +406,8 @@ static void test_audio_controls(void)
 #ifdef CONFIG_SDR_WAVESHARE_43
             int zy = LCD_H - 156 + 18;
             int mw = LCD_W - 208 - 18;
-            assert(view_zoom_button_at(30, zy) == VIEW_ZOOM_DN);
-            assert(view_zoom_button_at(mw - 24, zy) == VIEW_ZOOM_UP);
+            assert(view_zoom_button_at(30, zy) == -1); /* moved to header, no footer duplicate */
+            assert(view_zoom_button_at(mw - 24, zy) == -1);
             assert(view_zoom_button_at(mw / 2, zy) == -1);
             assert(view_mode_button_at(30, zy) == -1);
             assert(view_audio_button_at(30, zy) == -1);
@@ -430,9 +435,13 @@ static void test_audio_controls(void)
 #ifdef CONFIG_SDR_WAVESHARE_43
             int by = LCD_H - 22;
             assert(view_button_at(LCD_PORTRAIT ? 50 : 40, by) == VIEW_DN1M);
-            assert(view_button_at(LCD_W / 2, by) == VIEW_STEP);
+            assert(view_button_at(LCD_W / 2 + 10, by) == VIEW_STEP);
             assert(view_button_at(LCD_W - 45, by) == VIEW_UP1M);
-            assert(view_button_at(LCD_PORTRAIT ? 240 : 400, 20) == -1); /* no theme cycling */
+            #ifdef CONFIG_SDR_WAVESHARE_43
+            assert(view_button_at(20, view_tune_y() - 10) == -1);
+#else
+            assert(view_button_at(LCD_PORTRAIT ? 200 : LCD_W / 2, 20) == -1);
+#endif /* no theme cycling */
             assert(view_button_at(LCD_PORTRAIT ? 50 : 40, by) != VIEW_STEP);
             view_set_tune_step("1k");
             view_header(142000000, "AGC", -1);
@@ -440,7 +449,7 @@ static void test_audio_controls(void)
             view_set_tune_step("12.5k");
             view_header(142000000, "AGC", -1);
             view_audio_controls(5, 2, 4, 0, -1);
-            assert(view_button_at(LCD_W / 2, LCD_H - 22) == VIEW_STEP);
+            assert(view_button_at(LCD_W / 2 + 10, LCD_H - 22) == VIEW_STEP);
             assert(!memcmp(old_header, fb, header_bytes)); /* step moved out of header */
 #endif
             free(old_header);
@@ -588,18 +597,26 @@ static void test_touch_tuning(void)
             assert(!view_touch_frequency(sx, sy, fc + 1000000, 12500, VIEW_TOUCH_PEAK, &hz));
 #ifdef CONFIG_SDR_WAVESHARE_43
             assert(view_button_at(30, 20) == VIEW_TOUCH_MODE);
+            #ifdef CONFIG_SDR_WAVESHARE_43
             assert(view_button_at(LCD_W - 30, 20) == VIEW_GAIN);
-            assert(view_button_at(LCD_W / 2, 20) == -1);
+#else
+            assert(view_button_at(LCD_W - 30, 20) == VIEW_GAIN);
+#endif
+            #ifdef CONFIG_SDR_WAVESHARE_43
+            assert(view_button_at(20, view_tune_y() - 10) == -1);
+#else
+            assert(view_button_at(LCD_PORTRAIT ? 200 : LCD_W / 2, 20) == -1);
+#endif
             view_set_touch_mode(VIEW_TOUCH_FREE);
             view_header(fc, "AGC", -1);
-            uint16_t free_button[74 * 54];
-            for (int yy = 0; yy < 54; yy++)
+            uint16_t free_button[74 * 128];
+            for (int yy = 0; yy < view_tune_y(); yy++)
                 memcpy(free_button + yy * 74, &FB(4, yy), 74 * sizeof(uint16_t));
             view_set_touch_mode(VIEW_TOUCH_SNAP);
             view_header(fc, "AGC", -1);
             assert(view_button_at(30, 20) == VIEW_TOUCH_MODE);
             bool changed = false;
-            for (int yy = 0; yy < 54; yy++)
+            for (int yy = 0; yy < view_tune_y(); yy++)
                 if (memcmp(free_button + yy * 74, &FB(4, yy), 74 * sizeof(uint16_t))) changed = true;
             assert(changed); /* mode label actually changes on screen */
             view_set_touch_mode(VIEW_TOUCH_PEAK);
@@ -611,6 +628,15 @@ static void test_touch_tuning(void)
     puts("touch tune: spectrum-only, STEP snap, local strong FFT peaks, mode button in every look/orientation");
 }
 
+static void assert_phosphor_pixel(int i)
+{
+#ifdef CONFIG_SDR_WAVESHARE_43
+    /* Explicit safety-color exception: the requested red record/stop glyph only. */
+    int cx=LCD_PORTRAIT ? 356 : 380, x=i%LCD_W, y=i/LCD_W;
+    if(x>=cx-5 && x<=cx+5 && y>=7 && y<=17) return;
+#endif
+    assert(!(fb[i] & (0xf800 | 0x001f)));
+}
 static void test_phosphor_green(void)
 {
     static float db[1024];
@@ -627,12 +653,12 @@ static void test_phosphor_green(void)
         view_blit();
         view_audio_controls(5, 2, 4, 0, -1);
         for (int i = 0; i < LCD_W * LCD_H; i++)
-            assert(!(fb[i] & (0xf800 | 0x001f))); /* zero red and blue in RGB565 */
+            assert_phosphor_pixel(i);
         ctl_t ct = {.gain_idx = 0, .gain_n = 30, .gain_label = gain_label,
                     .gain_tenths = gain_tenths, .range_auto = true, .vol = 5};
         panel_open(&ct);
         for (int i = 0; i < LCD_W * LCD_H; i++)
-            assert(!(fb[i] & (0xf800 | 0x001f)));
+            assert_phosphor_pixel(i);
         view_splash(0, 1, "RTL-SDR receiver");
         view_splash_line(view_splash_text_y(), "USB link OK", SPLASH_OK);
         view_splash_line(view_splash_text_y() + 20, "USB link failed", SPLASH_BAD);
@@ -642,7 +668,7 @@ static void test_phosphor_green(void)
         for (int i = 0; i < LCD_W * LCD_H; i++)
             assert(!(fb[i] & (0xf800 | 0x001f)));
     }
-    puts("Phosphor: RGB565 red/blue channels zero across receiver and menu");
+    puts("Phosphor: monochrome except explicit red record safety glyph");
 }
 
 static void test_footer_stream_recovery(void)
@@ -662,6 +688,53 @@ static void test_footer_stream_recovery(void)
     assert(s_blit_count > drawn); /* footer must be restored without a value change */
     assert(FB(x, y) == expected);
     puts("stream recovery restores footer after the message clears it");
+}
+
+static void test_hf_diagnostic_page(void)
+{
+    view_init(RATE);
+    panel_init();
+    for (int portrait = 0; portrait < 2; portrait++) {
+        rpi_lcd_set_portrait(portrait != 0);
+        view_set_theme(0);
+        ctl_t ct = {.gain_label = gain_label, .gain_tenths = gain_tenths};
+        hf_diag_identity(&ct.hf_diag, "RTLSDRBlog", "Blog V4", true);
+        hf_diag_tune(&ct.hf_diag, 10000000, 0,
+                     (hf_diag_tuner_t){.pll = 0, .gpio5_attempted = false});
+        panel_open(&ct);
+        int cols = LCD_PORTRAIT ? 2 : 4, rows = LCD_PORTRAIT ? 5 : 3;
+        int cw = (LCD_W - 12 - 6 * (cols - 1)) / cols;
+        int ch = (LCD_H - view_tune_y() - 12 - 6 * (rows - 1)) / rows;
+        int x = 6 + 7 % cols * (cw + 6) + cw / 2;
+        int y = view_tune_y() + 6 + 7 / cols * (ch + 6) + ch / 2;
+        panel_touch(&ct, PANEL_PRESS, x, y, 0);
+        panel_touch(&ct, PANEL_RELEASE, x, y, 0); /* RF INPUT */
+        x = LCD_W - 60;
+        y = view_tune_y() + 28;
+        panel_touch(&ct, PANEL_PRESS, x, y, 0);
+        panel_touch(&ct, PANEL_RELEASE, x, y, 0); /* HF DIAG */
+        char line[96];
+        for (int i = 0; i < 10; i++) {
+            const char *text = hf_diag_line(&ct.hf_diag, i, line, sizeof line);
+            if (rpi_cv_text_w(text, 1) > LCD_W - 24)
+                fprintf(stderr, "diag line %d width %d screen %d: %s\n", i, rpi_cv_text_w(text, 1), LCD_W, text);
+            assert(rpi_cv_text_w(text, 1) <= LCD_W - 24);
+        }
+        assert(58 + 9 * 22 + 16 < LCD_H - view_tune_y());
+        uint16_t before[LCD_LONG * LCD_SHORT];
+        memcpy(before, fb, sizeof before);
+        hf_diag_tune(&ct.hf_diag, 10000000, -3,
+                     (hf_diag_tuner_t){.pll = 1, .gpio5_attempted = true, .gpio5_rc = -3});
+        panel_redraw(&ct);
+        assert(memcmp(before, fb, sizeof before)); /* diagnostic text actually reaches framebuffer */
+        panel_touch(&ct, PANEL_PRESS, 60, y, 0);
+        panel_touch(&ct, PANEL_RELEASE, 60, y, 0); /* BACK -> RF INPUT */
+        panel_touch(&ct, PANEL_PRESS, x, y, 0);
+        panel_touch(&ct, PANEL_RELEASE, x, y, 0); /* reopen */
+        assert(!(panel_touch(&ct, PANEL_PRESS, 60, y, 0) & CTL_CLOSE));
+        assert(!(panel_touch(&ct, PANEL_RELEASE, 60, y, 0) & CTL_CLOSE));
+    }
+    puts("HF diagnostic page: RF INPUT route, read-only text and BACK in both rotations");
 }
 
 static void test_rf_settings(void)
@@ -795,8 +868,16 @@ static void test_theme_header_disabled(void)
         rpi_lcd_set_portrait(portrait != 0);
         for (int look = 0; look < view_themes(); look++) {
             view_set_theme(look);
-            assert(view_button_at(LCD_W / 2, 20) == -1); /* frequency is not a theme switch */
-            assert(view_button_at(LCD_W - 30, 20) == VIEW_GAIN); /* MENU still works */
+            #ifdef CONFIG_SDR_WAVESHARE_43
+            assert(view_button_at(20, view_tune_y() - 10) == -1);
+#else
+            assert(view_button_at(LCD_PORTRAIT ? 200 : LCD_W / 2, 20) == -1);
+#endif /* frequency is not a theme switch */
+            #ifdef CONFIG_SDR_WAVESHARE_43
+            assert(view_button_at(LCD_W - 30, 20) == VIEW_GAIN);
+#else
+            assert(view_button_at(LCD_W - 30, 20) == VIEW_GAIN);
+#endif /* MENU still works */
             assert(view_theme() == look);
         }
         ctl_t ct = {.gain_idx = 0, .gain_n = 30, .gain_label = gain_label,
@@ -918,8 +999,252 @@ static void test_sensor_entry(void)
     puts("SCAN > SENSORS entry touch hits in landscape and portrait");
 }
 
+static void test_quick_header(void)
+{
+#ifdef CONFIG_SDR_WAVESHARE_43
+    view_init(RATE);
+    for (int rotation = 0; rotation < 4; rotation++) {
+        int portrait = !(rotation & 1);
+        rpi_lcd_rotation = rotation;
+        rpi_lcd_set_portrait(portrait != 0);
+        for (int look = 0; look < view_themes(); look++) {
+            view_set_theme(look);
+            int y = look == 1 ? 27 : 17;
+            int touch = portrait ? 37 : 41;
+            int reset = portrait ? 102 : 118;
+            int gain = portrait ? 168 : 190;
+            assert(view_button_at(touch, y) == VIEW_TOUCH_MODE);
+            assert(view_button_at(gain, y) == VIEW_AGC_CYCLE);
+            assert(view_button_at(reset, y) == VIEW_RANGE_RESET);
+            assert(view_button_at(LCD_W / 2 - 10, LCD_H - 22) == VIEW_STEP_DOWN);
+            assert(view_button_at(LCD_W / 2 + 10, LCD_H - 22) == VIEW_STEP);
+            int zoom = portrait ? 234 : 258;
+            assert(view_button_at(zoom, y) == VIEW_ZOOM_TOGGLE); /* after GAIN, before the readout */
+            assert(view_button_at(portrait ? 302 : 326, y) == VIEW_PRESETS);
+            assert(view_button_at(portrait ? 398 : 422, y) == VIEW_PLAY); /* separate triangle after REC */
+            assert(view_button_at(portrait ? 356 : 380, y) == VIEW_RECORD);
+            assert(!view_header_repeats(VIEW_RECORD) && !view_header_repeats(VIEW_PLAY));
+            view_set_recording(false);
+            view_header(100000100,"AGC",-1);
+            int rec_x=portrait ? 356 : 380, icon_y=(look==1 ? 19 : look==0 ? 4 : 5)+7;
+            assert(FB(rec_x,icon_y)==RGB565(255,48,48));
+            uint16_t circle_corner=FB(rec_x-5,icon_y-5);
+            view_set_recording(true);view_header(100000100,"AGC",-1);
+            assert(FB(rec_x-5,icon_y-5)==RGB565(255,48,48));
+            assert(circle_corner!=FB(rec_x-5,icon_y-5)); /* stop-square, not a color-only change */
+            view_set_recording(false);
+            int ro_y = look == 1 ? 73 : 60;     /* readout row (below buttons in portrait) */
+            assert(view_button_at(LCD_W / 2, ro_y) == -1);       /* frequency remains inert */
+            assert(view_button_at(LCD_W - 34, y) == VIEW_GAIN); /* MENU shares the top control bar */
+            assert(view_button_at((portrait ? 418 : 442) + 8, y) == VIEW_GAIN); /* fills remaining topbar, not frequency row */
+            assert(view_button_at(LCD_W - 34, ro_y) == -1); /* no stale second-row menu hit */
+            /* Real renderer consumes measured mV; boundary colors in every layout/look. */
+            const int volts[] = {3599,3600,3900,3901,-1};
+            const uint16_t inks[] = {RGB565(255,64,64),RGB565(255,190,40),
+                                    RGB565(255,190,40),RGB565(64,230,96)};
+            for (int v=0;v<5;v++) {
+                preview_battery_mv=volts[v];
+                view_header(1720000100,"AGC",-1);
+                if(v<4) {
+                    int count=0;
+                    for(int by=(look==1?54:40);by<view_tune_y();by++)
+                        for(int bx=LCD_W-150;bx<LCD_W;bx++) count+=FB(bx,by)==inks[v];
+                    assert(count>10);
+                }
+            }
+            preview_battery_mv=-1;
+            /* Changing the widest readout cannot overwrite any header key. */
+            view_set_fine_tune(true);
+            view_header(100000100, "49.6 dB", -1);
+            uint16_t before[800 * 128];
+            memcpy(before, fb, LCD_W * view_tune_y() * sizeof fb[0]);
+            view_header(1720000100, "49.6 dB", -1);
+            for (int yy = 0; yy < view_tune_y(); yy++)
+                for (int xx = 0; xx < LCD_W; xx++)
+                    if (view_button_at(xx, yy) >= 0)
+                        assert(FB(xx, yy) == before[yy * LCD_W + xx]);
+            const int xs[] = {touch, reset, gain, zoom, LCD_W - 34, 45,
+                              LCD_W / 2 - 10, LCD_W / 2 + 10, LCD_W - 45, portrait ? 302 : 326, portrait ? 398 : 422, portrait ? 356 : 380};
+            const int ids[] = {VIEW_TOUCH_MODE, VIEW_RANGE_RESET, VIEW_AGC_CYCLE, VIEW_ZOOM_TOGGLE,
+                               VIEW_GAIN, VIEW_DN1M, VIEW_STEP_DOWN, VIEW_STEP, VIEW_UP1M, VIEW_PRESETS, VIEW_PLAY, VIEW_RECORD};
+            for (int k = 0; k < 12; k++) {
+                int sy = k < 5 || k >= 9 ? y : LCD_H - 22, px, py, sx, yy;
+                waveshare_screen_to_panel(rotation, xs[k], sy, &px, &py);
+                waveshare_panel_to_screen(rotation, px, py, &sx, &yy);
+                assert(view_button_at(sx, yy) == ids[k]);
+                screen_idle_t idle = {.asleep = true};
+                assert(screen_idle_update(&idle, 60, 1, true) & SCREEN_CONSUME);
+                assert(screen_idle_update(&idle, 60, 2, false) & SCREEN_CONSUME);
+                assert(screen_idle_update(&idle, 60, 50002, true) & SCREEN_CONSUME);
+                assert(screen_idle_update(&idle, 60, 60000, false) & SCREEN_CONSUME);
+                assert(screen_idle_update(&idle, 60, 160000, false) & SCREEN_CONSUME);
+                assert(!(screen_idle_update(&idle, 60, 160001, true) & SCREEN_CONSUME));
+            }
+            /* Each selector half has independent pressed feedback and cached redraw. */
+            view_audio_controls(5, 2, 4, 0, -1);
+            uint32_t footer = crc32(0, (const Bytef *)(fb + (LCD_H - 44) * LCD_W), LCD_W * 44 * sizeof fb[0]);
+            view_audio_controls(5, 2, 4, 0, VIEW_STEP_DOWN);
+            assert(crc32(0, (const Bytef *)(fb + (LCD_H - 44) * LCD_W), LCD_W * 44 * sizeof fb[0]) != footer);
+            view_audio_controls(5, 2, 4, 0, VIEW_STEP);
+            assert(crc32(0, (const Bytef *)(fb + (LCD_H - 44) * LCD_W), LCD_W * 44 * sizeof fb[0]) != footer);
+            assert(view_button_at(LCD_W / 2, LCD_H - 22) == -1);
+            assert(view_button_at(-1, y) == -1 && view_button_at(LCD_W, y) == -1);
+            view_header(142000100, "AGC", -1);
+            uint32_t baseline = crc32(0, (const Bytef *)fb, LCD_W * 54 * sizeof fb[0]);
+            view_header(142000100, "AGC", VIEW_AGC_CYCLE);
+            assert(crc32(0, (const Bytef *)fb, LCD_W * 54 * sizeof fb[0]) != baseline);
+            view_header(142000100, "AGC", VIEW_RANGE_RESET);
+            assert(crc32(0, (const Bytef *)fb, LCD_W * 54 * sizeof fb[0]) != baseline);
+            /* The header ZOOM key shows the active preset and has pressed feedback. */
+            view_set_zoom_cycle(0);
+            view_header(142000100, "AGC", -1);
+            uint32_t zoom0 = crc32(0, (const Bytef *)fb, LCD_W * 54 * sizeof fb[0]);
+            view_set_zoom_cycle(3);
+            view_header(142000100, "AGC", -1);
+            assert(crc32(0, (const Bytef *)fb, LCD_W * 54 * sizeof fb[0]) != zoom0); /* label follows the preset */
+            uint32_t zoom3 = crc32(0, (const Bytef *)fb, LCD_W * 54 * sizeof fb[0]);
+            view_header(142000100, "AGC", VIEW_ZOOM_TOGGLE);
+            assert(crc32(0, (const Bytef *)fb, LCD_W * 54 * sizeof fb[0]) != zoom3); /* pressed feedback */
+            view_set_zoom_cycle(0);
+            view_header(142000100, "AGC", -1);
+        }
+    }
+#endif
+    puts("top-left TOUCH/GAIN/ZOOM/RANGE keys and inert frequency in every layout/look");
+}
+
+static void test_range_reset_waterfall(void)
+{
+    static float db[1024];
+    view_init(RATE);
+    for (int portrait = 0; portrait < 2; portrait++) {
+        rpi_lcd_set_portrait(portrait != 0);
+        view_set_theme(0);
+        view_set_range(true, -20, 60);
+        for (int i = 0; i < 1024; i++) db[i] = -70;
+        for (int i = 0; i < 55; i++) view_render(db, 1024, 142000000);
+        view_blit_waterfall();
+        int y0 = view_spectrum_bottom() + 24; /* all looks have axis <= 24 px */
+        int nonzero = 0;
+        for (int y = y0; y < y0 + 16; y++)
+            for (int x = 0; x < LCD_W; x++) nonzero += FB(x, y) != 0;
+        assert(nonzero > 0); /* actual previously rendered waterfall pixels */
+        view_reset();
+        view_blit_waterfall(); /* new frames must not bring back old rows */
+        for (int y = y0; y < y0 + 16; y++)
+            for (int x = 0; x < LCD_W; x++) assert(FB(x, y) == 0);
+        view_render(db, 1024, 142000000);
+        view_blit_waterfall();
+        for (int y = y0 + 2; y < y0 + 16; y++)
+            for (int x = 0; x < LCD_W; x++) assert(FB(x, y) == 0);
+    }
+    puts("range reset clears stored waterfall lines, not just the visible framebuffer");
+}
+
+
+#ifdef CONFIG_SDR_WAVESHARE_43
+static int sd_panel_click(ctl_t *ct,int x,int y) {
+    int result=panel_touch(ct,PANEL_PRESS,x,y,0);
+    result|=panel_touch(ct,PANEL_RELEASE,x,y,1);
+    return result;
+}
+#endif
+static void test_sd_audio_panel(void) {
+#ifdef CONFIG_SDR_WAVESHARE_43
+    view_init(RATE);panel_init();
+    for(int rot=0;rot<4;rot++) {
+        bool portrait=!(rot&1);
+        rpi_lcd_set_portrait(portrait);
+#ifdef CONFIG_SDR_WAVESHARE_43
+        rpi_lcd_rotation=rot;
+#endif
+        for(int look=0;look<view_themes();look++) {
+            view_set_theme(look);
+            ctl_t ct={.gain_label=gain_label,.gain_tenths=gain_tenths,.audio_file=-1};
+            ct.sd_audio.count=5;
+            for(int i=0;i<5;i++)snprintf(ct.sd_audio.files[i],SD_AUDIO_NAME,"RX%06d.WAV",i+1);
+            snprintf(ct.sd_audio.status,sizeof ct.sd_audio.status,"Synthetic host preview - not hardware");
+            panel_open_recordings(&ct);
+            int by=view_tune_y()+56,bw=LCD_W-12,cw=(bw-18)/4;
+            int y=by+22;
+            assert(sd_panel_click(&ct,6+cw/2,y)==CTL_SD_REFRESH);
+            assert(sd_panel_click(&ct,6+(cw+6)+cw/2,y)==0); /* capture is main-header only */
+            assert(sd_panel_click(&ct,6+2*(cw+6)+cw/2,y)==0); /* no selection */
+            int bh=LCD_H-view_tune_y()-62;
+            int row_h=(bh-88-92-18)/4;
+            int gap_y=by+44+6+92+6+row_h-6+1;
+            uint16_t clean_gap[800];
+            ct.sd_audio.count=0;panel_redraw(&ct);
+            for(int xx=0;xx<LCD_W;xx++) clean_gap[xx]=FB(xx,gap_y);
+            ct.sd_audio.count=5;panel_redraw(&ct);
+            for(int xx=0;xx<LCD_W;xx++) assert(clean_gap[xx]==FB(xx,gap_y));
+            assert(sd_panel_click(&ct,LCD_W/2,by+44+6+92+6+row_h/2)==0);
+            assert(ct.audio_file==0);
+            assert(!strcmp(ct.audio_selected_name,"RX000001.WAV"));
+            assert(sd_panel_click(&ct,6+2*(cw+6)+cw/2,y)==CTL_SD_PLAY);
+            assert(sd_panel_click(&ct,6+3*(cw+6)+cw/2,y)==CTL_SD_STOP);
+            const char *long_name="261116-220530_4294.967295M_NFM_1234567890123456789012345678.wav";
+            snprintf(ct.sd_audio.files[0],SD_AUDIO_NAME,"%s",long_name);panel_redraw(&ct);
+            sd_panel_click(&ct,LCD_W/2,by+44+6+92+6+row_h/2);
+            /* Delete is a separate explicit confirm/cancel flow, with a frozen
+             * full basename even if the worker refreshes the selected row. */
+            assert(sd_panel_click(&ct,6+(cw+6)+cw/2,y)==0);
+            assert(!strcmp(ct.audio_delete_name,long_name));
+            assert(sd_panel_click(&ct,LCD_W/4,by+122)==0); /* CANCEL */
+            assert(sd_panel_click(&ct,6+(cw+6)+cw/2,y)==0);
+            snprintf(ct.sd_audio.files[0],SD_AUDIO_NAME,"RX000099.WAV");
+            assert(sd_panel_click(&ct,3*LCD_W/4,by+122)==CTL_SD_DELETE);
+            assert(!strcmp(ct.audio_delete_name,long_name));
+            ct.sd_audio.state=SD_AUDIO_RECORDING;panel_redraw(&ct);
+            assert(sd_panel_click(&ct,6+(cw+6)+cw/2,y)==0); /* cannot double-start */
+            assert(sd_panel_click(&ct,6+3*(cw+6)+cw/2,y)==CTL_SD_STOP);
+            assert(sd_panel_click(&ct,50,view_tune_y()+28)==CTL_SD_STOP); /* BACK stops */
+            assert(!panel_recordings_visible());
+            panel_open_presets(&ct); /* reuse the BAND selection routing */
+            int cols=portrait?2:4,rows=portrait?5:3;
+            int ch=(bh-54-6*(rows-1))/rows;
+            int w=(bw-6*(cols-1))/cols;
+            assert(sd_panel_click(&ct,6+w/2,by+ch/2)&CTL_BAND);
+        }
+    }
+    puts("SD panel: select/play/REC/STOP, disabled busy controls, BACK stop, existing presets; five themes/four rotations");
+#endif
+}
+
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--test-sd-audio")) { test_sd_audio_panel(); return 0; }
+    if (argc > 5 && !strcmp(argv[1], "--sd-snapshot")) {
+        int look=atoi(argv[3]),rot=atoi(argv[4]);
+        rpi_lcd_set_portrait(!(rot&1));
+#ifdef CONFIG_SDR_WAVESHARE_43
+        rpi_lcd_rotation=rot;
+#endif
+        view_init(RATE);panel_init();view_set_theme(look);
+        view_set_recording(!strcmp(argv[5],"recording"));
+        view_set_fine_tune(true);view_set_zoom_cycle(0);
+        view_header(1720000100,"49.6 dB",-1);view_axis(1720000100);
+        ctl_t ct={.gain_label=gain_label,.gain_tenths=gain_tenths,.audio_file=-1};
+        snprintf(ct.sd_audio.status,sizeof ct.sd_audio.status,"Synthetic host preview - no card data");
+        if(!strcmp(argv[5],"recordings") || !strcmp(argv[5],"delete")) {
+            ct.sd_audio.count=3;ct.audio_file=0;
+            snprintf(ct.audio_selected_name,SD_AUDIO_NAME,"261116-220530_99.1M_FM.wav");
+            snprintf(ct.sd_audio.files[0],SD_AUDIO_NAME,"261116-220530_99.1M_FM.wav");
+            snprintf(ct.sd_audio.files[1],SD_AUDIO_NAME,"unsynced_7.1001M_USB_999999.wav");
+            snprintf(ct.sd_audio.files[2],SD_AUDIO_NAME,"RX000001.WAV");
+            panel_open_recordings(&ct);
+#ifdef CONFIG_SDR_WAVESHARE_43
+            if(!strcmp(argv[5],"delete")) {
+                int cw=(LCD_W-30)/4;
+                sd_panel_click(&ct,6+(cw+6)+cw/2,view_tune_y()+78);
+            }
+#endif
+        }
+        else view_message("Synthetic host preview", "No live RF or battery telemetry");
+        /* view_message clears header, so redraw it for the receiver preview. */
+        view_header(1720000100,"49.6 dB",-1);
+        write_png(argv[2],fb,LCD_W,LCD_H);return 0;
+    }
     if (argc > 2 && !strcmp(argv[1], "--settings-snapshot")) {
         rpi_lcd_set_portrait(argc > 3 && !strcmp(argv[3], "--portrait"));
         view_init(RATE); panel_init();
@@ -959,9 +1284,12 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "--test-phosphor")) { test_phosphor_green(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-footer-recovery")) { test_footer_stream_recovery(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-rf")) { test_rf_settings(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "--test-hf-diag")) { test_hf_diagnostic_page(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-ism")) { test_ism_bands(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-screen")) { test_screen_settings(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-sensors")) { test_sensor_entry(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "--test-quick-header")) { test_quick_header(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "--test-range-reset-waterfall")) { test_range_reset_waterfall(); return 0; }
     if (argc > 2 && !strcmp(argv[1], "--audio-snapshot")) {
         static float db[1024];
         bool portrait = false, phosphor = false;

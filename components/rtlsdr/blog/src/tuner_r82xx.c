@@ -1162,6 +1162,10 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 	uint8_t cable_2_in;
 	uint8_t cable_1_in;
 	uint8_t air_in;
+	priv->diag_pll = -1;
+	priv->diag_gpio5_attempted = 0;
+	priv->diag_gpio5_rc = 0;
+	priv->diag_gpio5_level = 0;
 
 	is_rtlsdr_blog_v4 = rtlsdr_check_dongle_model(priv->rtl_dev, "RTLSDRBlog", "Blog V4");
 	is_rtlsdr_blog_v4l = rtlsdr_check_dongle_model(priv->rtl_dev, "RTLSDRBlog", "Blog V4L");
@@ -1173,6 +1177,8 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 	//priv->rf_freq = upconvert_freq;
 
 	lo_freq = upconvert_freq + priv->int_freq;
+	priv->diag_tuner_hz = upconvert_freq;
+	priv->diag_lo_hz = lo_freq;
 
 	rc = r82xx_set_mux(priv, lo_freq);
 	if (rc < 0)
@@ -1183,6 +1189,8 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 		goto err;
 
 	rc = r82xx_set_pll(priv, lo_freq);
+	/* Do not treat rc==0 as lock: this driver returns 0 on PLL unlock. */
+	priv->diag_pll = rc < 0 ? -1 : !!priv->has_lock;
 	if (rc < 0 || !priv->has_lock)
 		goto err;
 
@@ -1199,7 +1207,8 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 		/* select tuner band based on frequency and only switch if there is a band change
 		 *(to avoid excessive register writes when tuning rapidly)
 		 */
-		band = (freq <= MHZ(28.8)) ? HF : ((freq > MHZ(28.8) && freq < MHZ(250)) ? VHF : UHF);
+		/* Match the strict HF upconversion boundary above. */
+		band = (freq < MHZ(28.8)) ? HF : ((freq < MHZ(250)) ? VHF : UHF);
 
 		/* bypass tracking filter for HF to reduce insertion loss,
 		 * the upconverter path doesn't benefit from it.
@@ -1216,7 +1225,8 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 
 		/* switch between tuner inputs on the RTL-SDR Blog V4 */
 		if (band != priv->input) {
-			priv->input = band;
+			/* A partial switch leaves hardware uncertain; retry either band. */
+			priv->input = 0xff;
 
 			/* activate cable 2 (HF input) */
 			cable_2_in = (band == HF) ? 0x08 : 0x00;
@@ -1227,6 +1237,9 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 
 			/* Control upconverter GPIO switch on newer batches */
 			rc = rtlsdr_set_bias_tee_gpio(priv->rtl_dev, 5, !cable_2_in);
+			priv->diag_gpio5_attempted = 1;
+			priv->diag_gpio5_level = !cable_2_in;
+			priv->diag_gpio5_rc = rc;
 
 			if (rc < 0)
 				goto err;
@@ -1244,6 +1257,7 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 
 			if (rc < 0)
 				goto err;
+			priv->input = band;
 		}
 	}
 	else if (is_rtlsdr_blog_v4l)
@@ -1251,7 +1265,8 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 		/* select tuner band based on frequency and only switch if there is a band change
 		 *(to avoid excessive register writes when tuning rapidly)
 		 */
-		band = (freq <= MHZ(28.8)) ? HF : UHF;
+		/* V4L uses Air-In (UHF), not V4's separate VHF input, above HF. */
+		band = (freq < MHZ(28.8)) ? HF : UHF;
 
 		/* bypass tracking filter for HF to reduce insertion loss,
 		 * the upconverter path doesn't benefit from it.
@@ -1268,12 +1283,16 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 
 		/* switch between tuner inputs on the RTL-SDR Blog V4L */
 		if (band != priv->input) {
-			priv->input = band;
+			/* A partial switch leaves hardware uncertain; retry either band. */
+			priv->input = 0xff;
 
 			cable_1_in = (band == HF) ? 0x40 : 0x00;
 
 			/* Control upconverter GPIO switch on newer batches */
 			rc = rtlsdr_set_bias_tee_gpio(priv->rtl_dev, 5, !cable_1_in);
+			priv->diag_gpio5_attempted = 1;
+			priv->diag_gpio5_level = !cable_1_in;
+			priv->diag_gpio5_rc = rc;
 
 			if (rc < 0)
 				goto err;
@@ -1290,6 +1309,7 @@ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq)
 
 			if (rc < 0)
 				goto err;
+			priv->input = band;
 		}
 	}
 	else /* Standard R828D dongle*/

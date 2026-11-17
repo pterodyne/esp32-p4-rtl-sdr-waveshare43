@@ -5,6 +5,9 @@
  * audio: filter and mode, volume, squelch; bands). Touch is sampled three times a frame; menu keys and tuning act when the finger lifts. Everything is kept in NVS namespace "sdr": freq, gaint (tenths of a dB,
  * -1 = AGC), theme, rauto, ref, rspan, zoom, bw, audctl (versioned audio-state blob), mem (channel memories); logn is the SD log session (sdlog.c). Legacy vol/sql keys are read when audctl is absent. */
 #include <assert.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include "remote_diag.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,17 +28,23 @@
 #include "pins.h"
 #ifdef CONFIG_SDR_WAVESHARE_43
 #include "waveshare_geometry.h"
+#include "touch_mode_store.h"
+#include "quick_gain.h"
 #endif
 #include "sdr.h"
 #include "rtlsdr_usb.h"
 #include "spectrum.h"
 #include "view.h"
+#include "battery_voltage.h"
 #include "panel.h"
 #include "adsb.h"
 #include "adsb_view.h"
 #include "amap.h"
 #include "sdcard.h"
 #include "sdlog.h"
+#include "sd_audio.h"
+#include "wav_audio.h"
+#include <time.h>
 #include "scan_view.h"
 #include "sensor_view.h"
 #include "sensor_event_age.h"
@@ -76,7 +85,9 @@ static bool s_mscan;                        /* hopping through the channel memor
 static int s_mscan_i = -1;                  /* slot tuned by the scan */
 static int64_t s_hop_at, s_dwell_until;
 
+static int s_battery_drawn = -1;
 static void draw_header(int pressed) {
+    s_battery_drawn = battery_voltage_get();
     view_header(sdr_freq(), sdr_gain_label(sdr_gain_index()), pressed);
     if (!s_panel) view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, pressed);
 }
@@ -91,6 +102,17 @@ static audio_save_pending_t s_audio_pending;
 static screen_idle_t s_screen_idle;
 static peak_iq_gate_t s_peak_iq;
 static int64_t s_screen_save_at;
+#ifdef CONFIG_SDR_WAVESHARE_43
+static int64_t s_touch_save_at;
+static void touch_mode_try_save(void)
+{
+    int64_t now = esp_timer_get_time();
+    if (!s_touch_save_at || now < s_touch_save_at) return;
+    esp_err_t err = touch_mode_store_save_reopening(&s_nvs_ready, &s_nvs, view_touch_mode());
+    s_touch_save_at = err == ESP_OK ? 0 : now + 5000000;
+    if (err != ESP_OK) ESP_LOGW(TAG, "TOUCH save failed (%s); retry in 5 s", esp_err_to_name(err));
+}
+#endif
 static void screen_settings_try_save(void)
 {
     int64_t now = esp_timer_get_time();
@@ -103,14 +125,18 @@ static void screen_settings_try_save(void)
 static int s_tune_step = TUNE_STEP_DEFAULT;
 #endif
 
+/* Diagnostic sessions freeze only frequency/gain persistence until reboot. */
+static bool s_remote_active;
+static uint32_t s_remote_saved_hz;
+static int s_remote_saved_gain;
 static void settings_changed(void) { s_save_at = esp_timer_get_time() + 3000000; }
 
 static void settings_maybe_save(bool force)
 {
     if (!settings_save_due(s_save_at, esp_timer_get_time(), force)) return;
     s_save_at = 0;
-    nvs_set_u32(s_nvs, "freq", sdr_freq());
-    nvs_set_i32(s_nvs, "gaint", sdr_gain_tenths(sdr_gain_index()));
+    nvs_set_u32(s_nvs, "freq", s_remote_active ? s_remote_saved_hz : sdr_freq());
+    nvs_set_i32(s_nvs, "gaint", s_remote_active ? s_remote_saved_gain : sdr_gain_tenths(sdr_gain_index()));
     nvs_set_i32(s_nvs, "theme", view_theme());
 #ifdef CONFIG_SDR_WAVESHARE_43
     nvs_set_i32(s_nvs, "tstep", s_tune_step);
@@ -180,6 +206,7 @@ static void apply_view(void)
     int n = 1024 << s_ctl.zoom;
     spectrum_set_size(n > NFFT_MAX ? NFFT_MAX : n);
     view_set_span(panel_zoom_hz(s_ctl.zoom));
+    view_set_zoom_cycle(s_ctl.zoom);          /* header ZOOM key shows the active preset */
     view_set_passband(panel_bw_hz(s_ctl.bw));
     view_set_sideband(s_ctl.bw == 4 ? 1 : s_ctl.bw == 5 ? -1 : 0);
     view_set_fine_tune(fine_frequency_visible());
@@ -329,6 +356,7 @@ static void retune(uint32_t hz)
 
 static void panel_show(bool on)
 {
+    sd_audio_playback_page(false);
     s_panel = on;
     if (on) {
         s_ctl.freq = sdr_freq();
@@ -339,6 +367,7 @@ static void panel_show(bool on)
         s_ctl.bias_error = !sdr_bias_command_ok();
         s_ctl.direct = sdr_direct_mode();
         s_ctl.direct_supported = sdr_direct_supported();
+        s_ctl.hf_diag = sdr_hf_diag_snapshot();
         panel_open(&s_ctl);
     } else {
         view_axis(sdr_freq());                 /* spectrum and waterfall come back next frame */
@@ -434,13 +463,70 @@ static void do_action(int act)
         return;
     }
 #ifdef CONFIG_SDR_WAVESHARE_43
-    if (act == VIEW_TOUCH_MODE) {
-        view_set_touch_mode((view_touch_mode() + 1) % (VIEW_TOUCH_PEAK + 1));
-        draw_header(act);                   /* ephemeral mode; never changes saved STEP */
+    if (act == VIEW_RECORD) {
+        sd_audio_snapshot(&s_ctl.sd_audio);
+        if (audio_ok()) {
+            if(s_ctl.sd_audio.record_requested) sd_audio_request(SD_AUDIO_STOP,NULL);
+            else {
+                char name[SD_AUDIO_NAME];
+                /* Freeze all metadata on REC, before any worker/mount delay. */
+                if(wav_record_name(name,sizeof name,sdr_freq(),s_ctl.bw,(int64_t)time(NULL),0))
+                    sd_audio_request(SD_AUDIO_RECORD,name);
+            }
+        }
+        sd_audio_snapshot(&s_ctl.sd_audio);
+        view_set_recording(s_ctl.sd_audio.record_requested);
+        draw_header(act);
         return;
     }
-    if (act == VIEW_STEP) {
-        s_tune_step = tune_step_next(s_tune_step);
+    if (act == VIEW_PRESETS || act == VIEW_PLAY) {
+        panel_show(true);
+        if (act == VIEW_PRESETS) panel_open_presets(&s_ctl);
+        else {
+            sd_audio_playback_page(true);
+            s_ctl.audio_file = -1;
+            sd_audio_snapshot(&s_ctl.sd_audio);
+            view_set_recording(s_ctl.sd_audio.record_requested);
+            panel_open_recordings(&s_ctl);
+            sd_audio_request(SD_AUDIO_REFRESH, NULL);
+        }
+        draw_header(act);
+        return;
+    }
+    if (act == VIEW_TOUCH_MODE) {
+        view_set_touch_mode((view_touch_mode() + 1) % (VIEW_TOUCH_PEAK + 1));
+        s_touch_save_at = esp_timer_get_time();
+        touch_mode_try_save();              /* survive an immediate battery-switch power cut */
+        draw_header(act);
+        return;
+    }
+    if (act == VIEW_AGC_CYCLE) {
+        int next = quick_gain_next(sdr_gain_index(), sdr_gain_presets(), sdr_gain_tenths);
+        sdr_set_gain_index(next);
+        s_ctl.gain_idx = sdr_gain_index();
+        settings_changed();
+        draw_header(act);
+        return;
+    }
+    if (act == VIEW_ZOOM_TOGGLE) {
+        s_ctl.zoom = (s_ctl.zoom + 1) % PANEL_ZOOMS;   /* forward through the presets, wrapping */
+        apply_view();
+        view_axis(sdr_freq());
+        settings_changed();
+        draw_header(act);
+        return;
+    }
+    if (act == VIEW_RANGE_RESET) {
+        s_ctl.range_auto = true;
+        view_set_range(true, s_ctl.ref_db, s_ctl.range_db);
+        view_reset();                       /* discard old scale/floor and waterfall history */
+        peak_wait_fresh_iq();               /* Peak waits for a new frame after the reset */
+        settings_changed();
+        draw_header(act);
+        return;
+    }
+    if (act == VIEW_STEP || act == VIEW_STEP_DOWN) {
+        s_tune_step = act == VIEW_STEP_DOWN ? tune_step_previous(s_tune_step) : tune_step_next(s_tune_step);
         view_set_tune_step(tune_step_label(s_tune_step));
         view_set_fine_tune(fine_frequency_visible());
         settings_changed();
@@ -473,7 +559,25 @@ static void do_action(int act)
 
 static void panel_event(int ev, int x, int y, int64_t now)
 {
+    bool was_recordings = panel_recordings_visible();
     int ch = panel_touch(&s_ctl, ev, x, y, now);
+    if (was_recordings && !panel_recordings_visible()) sd_audio_playback_page(false);
+    int sd_command = ch & CTL_SD_DELETE ? SD_AUDIO_DELETE : ch & CTL_SD_NEXT ? SD_AUDIO_NEXT : ch & CTL_SD_PREV ? SD_AUDIO_PREV :
+                     ch & CTL_SD_STOP ? SD_AUDIO_STOP : ch & CTL_SD_RECORD ? SD_AUDIO_RECORD :
+                     ch & CTL_SD_PLAY ? SD_AUDIO_PLAY : ch & CTL_SD_REFRESH ? SD_AUDIO_REFRESH : 0;
+    if (sd_command) {
+        const char *name = sd_command == SD_AUDIO_DELETE ? s_ctl.audio_delete_name : sd_command == SD_AUDIO_PLAY && s_ctl.audio_file >= 0 &&
+            s_ctl.audio_file < s_ctl.sd_audio.count ? s_ctl.audio_selected_name : NULL;
+        if ((sd_command == SD_AUDIO_RECORD || sd_command == SD_AUDIO_PLAY) && !audio_ok()) {
+            snprintf(s_ctl.sd_audio.status, sizeof s_ctl.sd_audio.status, "Audio codec unavailable");
+            panel_redraw(&s_ctl);
+        } else if (!sd_audio_request(sd_command, name)) {
+            snprintf(s_ctl.sd_audio.status, sizeof s_ctl.sd_audio.status, "SD audio busy / unavailable");
+            panel_redraw(&s_ctl);
+        }
+        if (sd_command == SD_AUDIO_DELETE || sd_command == SD_AUDIO_REFRESH || sd_command == SD_AUDIO_NEXT || sd_command == SD_AUDIO_PREV) s_ctl.audio_file = -1;
+        return;
+    }
     if (ch & CTL_SCREEN) {
         s_screen_idle.last_touch = now;
         s_screen_save_at = now;
@@ -579,9 +683,30 @@ static void poll_touch(const touch_cal_t *cal)
     uint16_t rx, ry, rz;
     int64_t now = esp_timer_get_time();
 
+    /* Snapshot status only, never SD access on the UI task. */
+    static int64_t audio_status_at;
+    if (now >= audio_status_at) {
+        static sd_audio_snapshot_t snapshot; /* UI-task owned; keep 64 full basenames off stack */
+        sd_audio_snapshot(&snapshot);
+        if (snapshot.generation != s_ctl.sd_audio.generation) {
+            bool batch_changed = snapshot.batch != s_ctl.sd_audio.batch;
+            if(s_ctl.audio_file>=0 && (s_ctl.audio_file>=snapshot.count ||
+                strcmp(s_ctl.audio_selected_name,snapshot.files[s_ctl.audio_file]))) s_ctl.audio_file=-1;
+            s_ctl.sd_audio = snapshot;
+            view_set_recording(snapshot.record_requested);
+            draw_header(-1);
+            if (s_ctl.audio_file >= snapshot.count) s_ctl.audio_file = -1;
+            if (s_panel && panel_recordings_visible()) {
+                if (batch_changed) {s_ctl.audio_file = -1;panel_open_recordings(&s_ctl);}
+                else panel_redraw(&s_ctl);
+            }
+        }
+        audio_status_at = now + 100000;
+    }
     bool contact = xpt2046_read_raw(&rx, &ry, &rz);
     screen_settings_try_save();
 #ifdef CONFIG_SDR_WAVESHARE_43
+    touch_mode_try_save();
     int screen_action = screen_idle_update(&s_screen_idle, s_ctl.screen_timeout, now, contact);
     if (screen_action & (SCREEN_SLEEP | SCREEN_WAKE)) {
         esp_err_t err = rpi_lcd_set_display_on(!(screen_action & SCREEN_SLEEP));
@@ -720,7 +845,7 @@ static void poll_touch(const touch_cal_t *cal)
             next_repeat = now + 150000;
         }
     }
-    else if (where == 0 && act >= 0 && act < VIEW_GAIN && act != VIEW_STEP && now >= next_repeat) {
+    else if (where == 0 && view_header_repeats(act) && now >= next_repeat) {
         do_action(act);
         next_repeat = now + 150000;
     }
@@ -1108,8 +1233,91 @@ static void scan_mode(const touch_cal_t *cal, int kind)
 
 /* ---------------------------------------------------------------------------- loop -- */
 
+/* No UART task and no second USB owner: called only by the receiver UI loop.
+ * Foreground decoder modes defer console service until they return. */
+static void remote_diag_status(void)
+{
+    hf_diag_state_t d = sdr_hf_diag_snapshot();
+    hf_diag_tune_t t = d.latest;
+    printf("DIAG status streaming=%d requested_hz=%" PRIu32
+           " tune_valid=%d center_rc=%d tuner_computed_hz=%" PRIu32
+           " lo_computed_hz=%" PRIu32 " pll_last_readback=%d"
+           " gpio5_attempted=%d gpio5_command_level=%d gpio5_rc=%d"
+           " gain_cached_tenths=%d gain_readback=unavailable"
+           " bias_cached=%d bias_command_ok=%d bias_forced=%d"
+           " switch_readback=unavailable total_iq_bytes=%" PRIu64 "\n",
+           sdr_streaming(), sdr_freq(), t.valid, t.center_rc,
+           t.tuner.tuner_hz, t.tuner.lo_hz, t.valid ? t.tuner.pll : -1,
+           t.tuner.gpio5_attempted, t.tuner.gpio5_level, t.tuner.gpio5_rc,
+           sdr_gain_tenths(sdr_gain_index()), sdr_bias_tee(), sdr_bias_command_ok(),
+           sdr_bias_tee_forced(), sdr_total_bytes());
+    if (sdr_streaming() && sdr_total_bytes() >= 2048) {
+        uint8_t iq[2048];
+        uint64_t end = sdr_ring_latest(iq, sizeof iq);
+        unsigned si = 0, sq = 0, clipped = 0; uint64_t power = 0;
+        for (size_t i = 0; i < sizeof iq; i += 2) {
+            si += iq[i]; sq += iq[i+1];
+            int a = 2 * (int)iq[i] - 255, b = 2 * (int)iq[i+1] - 255;
+            power += a*a + b*b;
+            clipped += iq[i] == 0 || iq[i] == 255 || iq[i+1] == 0 || iq[i+1] == 255;
+        }
+        printf("DIAG iq end=%" PRIu64 " pairs=1024 mean_i=%.3f mean_q=%.3f"
+               " mean_square_centered=%.3f clipped_pairs=%u freshness=not_guaranteed_after_tune\n",
+               end, si / 1024.0, sq / 1024.0, power / 4096.0, clipped);
+    }
+    fflush(stdout);
+}
+
+static void remote_diag_poll(void)
+{
+    static remote_parser_t parser;
+    static bool initialized;
+    if (!initialized) {
+        int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+        if (flags < 0 || fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) < 0) return;
+        initialized = true;
+        printf("DIAG ready: status | tune Hz | gain agc | gain tenths; bias OFF only\n");
+    }
+    /* Bounded work even if the host floods input. */
+    for (int budget = 0; budget < 128; budget++) {
+        unsigned char ch; remote_command_t cmd;
+        if (read(STDIN_FILENO, &ch, 1) != 1) break;
+        if (!remote_parse_byte(&parser, ch, &cmd)) continue;
+        if (cmd.kind == REMOTE_ERROR) {
+            printf("DIAG error invalid_command\n");
+            continue;
+        }
+        if (cmd.kind == REMOTE_STATUS) { remote_diag_status(); continue; }
+        if (!sdr_streaming()) { printf("DIAG error not_streaming\n"); continue; }
+        /* Never enable antenna power, and reject control if OFF cannot complete. */
+        if (!sdr_set_bias_tee(false) || sdr_bias_tee() || sdr_bias_tee_forced()) {
+            printf("DIAG error bias_off_not_confirmed\n"); continue;
+        }
+        if (!s_remote_active) {
+            settings_maybe_save(true); /* flush pending user state before changing it */
+            s_remote_saved_hz = sdr_freq();
+            s_remote_saved_gain = sdr_gain_tenths(sdr_gain_index());
+            s_remote_active = true;
+        }
+        s_mscan = false;
+        if (cmd.kind == REMOTE_TUNE) {
+            sdr_set_freq(cmd.value);
+            peak_wait_fresh_iq();
+            view_reset();
+            view_axis(sdr_freq());
+        } else {
+            sdr_set_gain_tenths(cmd.kind == REMOTE_GAIN_AGC ? -1 : (int)cmd.value);
+            s_ctl.gain_idx = sdr_gain_index();
+            printf("DIAG gain command_dispatched=1 usb_outcome=unavailable readback=unavailable\n");
+        }
+        draw_header(-1);
+        remote_diag_status();
+    }
+}
+
 void ui_run(const touch_cal_t *cal)
 {
+    battery_voltage_start();
     s_iq = heap_caps_malloc(IQ_PER_FRAME * 2, MALLOC_CAP_SPIRAM);
     assert(s_iq);
     spectrum_init();
@@ -1133,6 +1341,7 @@ void ui_run(const touch_cal_t *cal)
 #ifdef CONFIG_SDR_WAVESHARE_43
     s_tune_step = tune_step_index(nvs_int("tstep", TUNE_STEP_DEFAULT));
     view_set_tune_step(tune_step_label(s_tune_step));
+    view_set_touch_mode(touch_mode_loaded(nvs_int("touchmode", VIEW_TOUCH_FREE)));
 #endif
     audio_settings_t boot_audio = {.volume = 4, .squelch = 0, .muted = true};
     if (s_nvs_ready) {
@@ -1166,8 +1375,11 @@ void ui_run(const touch_cal_t *cal)
     int frames = 0;
     int64_t t_log = esp_timer_get_time(), t_dsp = 0, t_lcd = 0;
     uint64_t b_log = sdr_total_bytes();
+    sd_audio_init();
+    s_ctl.audio_file = -1;
     for (;;) {
         audio_settings_try_save(false); /* also retry while the SDR is lost */
+        remote_diag_poll();
         if (!sdr_streaming()) peak_wait_fresh_iq(); /* before touch during recovery */
         poll_touch(cal); /* timeout/wake also work during stream loss */
         if (s_adsb_req) {
@@ -1186,6 +1398,7 @@ void ui_run(const touch_cal_t *cal)
             sensor_mode(cal);
             peak_wait_fresh_iq();
         }
+        if (!s_panel && battery_voltage_get() != s_battery_drawn) draw_header(-1);
         if (!sdr_streaming()) {
             static int restarts;
             if (!rtlsdr_usb_take_gone() && restarts < 3) {

@@ -891,6 +891,9 @@ int rtlsdr_set_center_freq(rtlsdr_dev_t *dev, uint32_t freq)
 
 	if (!dev || !dev->tuner)
 		return -1;
+	/* Even an early return before the tuner must not report stale readback. */
+	dev->r82xx_p.diag_pll = -1;
+	dev->r82xx_p.diag_gpio5_attempted = 0;
 
 	/* Get the last direct sampling status */
 	last_ds = rtlsdr_get_direct_sampling(dev);
@@ -926,6 +929,20 @@ int rtlsdr_set_center_freq(rtlsdr_dev_t *dev, uint32_t freq)
 	}
 
 	return r;
+}
+
+int rtlsdr_get_r82xx_tune_diag(rtlsdr_dev_t *dev, rtlsdr_r82xx_tune_diag_t *out)
+{
+	if (!dev || !out || (dev->tuner_type != RTLSDR_TUNER_R820T &&
+	                    dev->tuner_type != RTLSDR_TUNER_R828D))
+		return -1;
+	out->tuner_hz = dev->r82xx_p.diag_tuner_hz;
+	out->lo_hz = dev->r82xx_p.diag_lo_hz;
+	out->pll = dev->r82xx_p.diag_pll;
+	out->gpio5_attempted = dev->r82xx_p.diag_gpio5_attempted;
+	out->gpio5_rc = dev->r82xx_p.diag_gpio5_rc;
+	out->gpio5_level = dev->r82xx_p.diag_gpio5_level;
+	return 0;
 }
 
 uint32_t rtlsdr_get_center_freq(rtlsdr_dev_t *dev)

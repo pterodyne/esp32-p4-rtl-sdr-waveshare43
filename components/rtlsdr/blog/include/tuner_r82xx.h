@@ -85,6 +85,10 @@ struct r82xx_priv {
 	uint8_t				input;
 	int				has_lock;
 	int				init_done;
+	/* Per-tune observations only. GPIO5 is a command return, not a voltage readback. */
+	uint32_t diag_tuner_hz, diag_lo_hz; /* computed by actual tune path, not readback */
+	int				diag_pll; /* -1 not checked, 0 unlocked, 1 locked */
+	int				diag_gpio5_attempted, diag_gpio5_rc, diag_gpio5_level;
 
 	/* Store current mode */
 	uint32_t			delsys;

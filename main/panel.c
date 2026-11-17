@@ -70,8 +70,9 @@ const char *panel_band(int i, uint32_t *freq, int *bw, int *zoom)
 
 /* --------------------------------------------------------------------------- keys -- */
 
-enum { P_MENU, P_GAIN, P_RANGE, P_ZOOM, P_BW, P_BAND, P_SCAN, P_LOOK, P_MEM, P_SAVE, P_RF, P_SCREEN };
-static const char *s_title[] = {"CONTROLS", "GAIN", "RANGE", "ZOOM", "AUDIO", "BAND", "SCAN", "LOOK", "MEMORY", "SAVE TO", "RF INPUT", "SCREEN TIMEOUT"};
+static bool s_delete_confirm;
+enum { P_MENU, P_GAIN, P_RANGE, P_ZOOM, P_BW, P_BAND, P_SCAN, P_LOOK, P_MEM, P_SAVE, P_RF, P_SCREEN, P_DIAG, P_RECORDINGS };
+static const char *s_title[] = {"CONTROLS", "GAIN", "RANGE", "ZOOM", "AUDIO", "BAND", "SCAN", "LOOK", "MEMORY", "SAVE TO", "RF INPUT", "SCREEN TIMEOUT", "HF DIAG", "SD AUDIO WAV"};
 #define LOOKS 5
 static const char *s_look_sub[LOOKS] = {"clean blue", "Mayhem style", "green CRT", "walnut and amber", "synthwave"};
 
@@ -84,23 +85,25 @@ enum {
     K_VOL_DN = K_LOOK + LOOKS, K_VOL_UP, K_SQL_DN, K_SQL_UP,
     K_MEMORY, K_SAVE, K_MSCAN, K_SLOT,      /* K_SLOT + 0..7: memory slots */
     K_DIRECT = K_SLOT + PANEL_MEMS, K_BIAS_OFF = K_DIRECT + 3, K_BIAS_ON,
-    K_PAGE_PREV, K_PAGE_NEXT, K_SENSOR, K_SCREEN,
+    K_PAGE_PREV, K_PAGE_NEXT, K_SENSOR, K_SCREEN, K_HF_DIAG = K_SCREEN + 4,
+    K_SD_DELETE, K_SD_CANCEL, K_SD_CONFIRM, K_SD_REFRESH, K_SD_RECORD, K_SD_PLAY, K_SD_STOP, K_SD_PREV, K_SD_NEXT, K_SD_FILE,
 };
 
 typedef struct {
     int x, y, w, h, id;
-    char l1[16], l2[32];                     /* l1 large, l2 small underneath */
+    char l1[16], l2[80];                     /* l1 large, l2 small underneath */
     bool sel, rep, big, disabled;            /* selected, repeats, 2x title, or read-only */
 } pkey_t;
 
 #define MAXK 16
 #define GAP 6
 static pkey_t s_k[MAXK];
-static int s_nk, s_page, s_band_page, s_hot = -1; /* selected BAND page survives redraw */
+static int s_nk, s_page, s_band_page, s_audio_page, s_hot = -1; /* selected BAND page survives redraw */
 static int64_t s_next_rep;
 static uint16_t *s_px;
 static int s_h;                               /* panel height */
 static view_colors_t K;
+static hf_diag_state_t s_diag_snapshot;
 
 void panel_init(void)
 {
@@ -183,11 +186,48 @@ static void build(const ctl_t *c)
         snprintf(band_title, sizeof band_title, "BAND %d/%d", s_band_page + 1, pages);
     }
     add(GAP, GAP, 120, bar, K_BACK, "< BACK", NULL)->big = true;
-    const int scan_w = s_page == P_MEM ? 120 + GAP : 0;  /* MEMORY has SCAN up here */
+    const int scan_w = (s_page == P_MEM || s_page == P_RF) ? 120 + GAP : 0;
     add(GAP + 120 + GAP, GAP, LCD_W - 3 * GAP - 120 - scan_w, bar, K_LABEL,
         s_page == P_BAND ? band_title : s_title[s_page], NULL)->big = true;
-    if (scan_w) add(LCD_W - GAP - 120, GAP, 120, bar, K_MSCAN, "SCAN", NULL)->big = true;
+    if (s_page == P_MEM) add(LCD_W - GAP - 120, GAP, 120, bar, K_MSCAN, "SCAN", NULL)->big = true;
+    if (s_page == P_RF) add(LCD_W - GAP - 120, GAP, 120, bar, K_HF_DIAG, "HF DIAG", NULL)->big = true;
     switch (s_page) {
+    case P_RECORDINGS: {
+        if(s_delete_confirm) {
+            add(GAP,by,bw,40,K_LABEL,"DELETE FILE?",NULL);
+            add(GAP,by+40,bw,40,K_LABEL,"",c->audio_delete_name);
+            grid(GAP,by+100,bw,44,2,1,0,K_SD_CANCEL,"CANCEL",NULL);
+            grid(GAP,by+100,bw,44,2,1,1,K_SD_CONFIRM,"YES DELETE",NULL);
+            break;
+        }
+        int nav_h=44, status_h=92, row_h=(bh-nav_h*2-status_h-3*GAP)/4;
+        const char *titles[]={"REFRESH","DELETE","PLAY","STOP"};
+        const int ids[]={K_SD_REFRESH,K_SD_DELETE,K_SD_PLAY,K_SD_STOP};
+        for(int i=0;i<4;i++) {
+            pkey_t *key=grid(GAP,by,bw,nav_h,4,1,i,ids[i],titles[i],NULL);
+            key->disabled=(i==0 && c->sd_audio.state!=SD_AUDIO_IDLE) ||
+                (i==1 && (c->sd_audio.state==SD_AUDIO_RECORDING || c->sd_audio.record_requested)) ||
+                (i==2 && c->sd_audio.state!=SD_AUDIO_IDLE) ||
+                ((i==1 || i==2) && (c->audio_file<0 || c->audio_file>=c->sd_audio.count));
+            key->sel=(i==1 && c->sd_audio.state==SD_AUDIO_RECORDING) || (i==2 && c->sd_audio.state==SD_AUDIO_PLAYING);
+        }
+        int sy=by+nav_h+GAP;
+        add(GAP,sy,bw,40,K_LABEL,"DEMOD AUDIO", "48k mono WAV - NOT raw IQ");
+        add(GAP,sy+40,bw,26,K_LABEL,"",c->sd_audio.status);
+        add(GAP,sy+66,bw,26,K_LABEL,"",c->sd_audio.name);
+        int first=s_audio_page*4;
+        for(int i=0;i<4 && first+i<c->sd_audio.count;i++) {
+            int at=first+i;
+            pkey_t *key=add(GAP,sy+status_h+GAP+i*row_h,bw,row_h-GAP,K_SD_FILE+i,
+                "",c->sd_audio.files[at]);
+            key->sel=at==c->audio_file;
+        }
+        int ny=by+bh-nav_h;
+        grid(GAP,ny,bw,nav_h,2,1,0,K_SD_PREV,"< PREV",NULL)->disabled=s_audio_page==0 && c->sd_audio.batch==0;
+        grid(GAP,ny,bw,nav_h,2,1,1,K_SD_NEXT,"NEXT >",NULL)->disabled=first+4>=c->sd_audio.count && !c->sd_audio.more;
+        break;
+    }
+    case P_DIAG: break; /* read-only lines are drawn below the title */
     case P_SCREEN: {
         static const char *labels[] = {"30 SECONDS", "60 SECONDS", "90 SECONDS", "NEVER"};
         static const int seconds[] = {30, 60, 90, 0};
@@ -326,6 +366,15 @@ static void draw_key(const rpi_canvas_t *c, const pkey_t *k, bool hot)
         rpi_cv_rrect(c, k->x + (hot ? 2 : 1), k->y + (hot ? 2 : 1), k->w - (hot ? 4 : 2), k->h - (hot ? 4 : 2),
                      r > 2 ? r - 2 : 0, fill);
     }
+    if(!k->l1[0]) {
+        /* A filename-only row has no invisible title above it. Keep its pixels
+         * inside the key; all truncation is local display text, never identity. */
+        char text[sizeof k->l2];snprintf(text,sizeof text,"%s",k->l2);
+        size_t n=strlen(text);
+        while(n && rpi_cv_text_w(text,1)>k->w-12) text[--n]=0;
+        rpi_cv_text(c,k->x+(k->w-rpi_cv_text_w(text,1))/2,k->y+(k->h-16)/2,text,sub,1);
+        return;
+    }
     int sc = (k->big || k->h >= 50) && rpi_cv_text_w(k->l1, 2) <= k->w - 12 ? 2 : 1;
     int th = 16 * sc + (k->l2[0] ? 18 : 0);
     int ty = k->y + (k->h - th) / 2;
@@ -341,6 +390,11 @@ static void render(void)
     rpi_canvas_t c = {s_px, LCD_W, s_h};
     rpi_cv_fill(&c, 0, 0, LCD_W, s_h, K.bg);
     for (int i = 0; i < s_nk; i++) draw_key(&c, &s_k[i], i == s_hot);
+    if (s_page == P_DIAG) {
+        char line[96];
+        for (int i = 0; i < 10; i++)
+            rpi_cv_text(&c, 12, 58 + i * 22, hf_diag_line(&s_diag_snapshot, i, line, sizeof line), K.txt, 1);
+    }
 }
 
 static void blit_rows(int y0, int h)
@@ -352,6 +406,7 @@ static void blit_rows(int y0, int h)
 
 static void show_all(const ctl_t *c)
 {
+    s_diag_snapshot = c->hf_diag;
     view_colors(&K);
     s_h = LCD_H - K.top;
     build(c);
@@ -381,6 +436,14 @@ void panel_open(const ctl_t *c)
     show_all(c);
 }
 
+void panel_open_presets(const ctl_t *c) {
+    s_page=P_BAND;s_band_page=0;s_hot=-1;show_all(c);
+}
+void panel_open_recordings(const ctl_t *c) {
+    s_delete_confirm=false;
+    s_page=P_RECORDINGS;s_audio_page=0;s_hot=-1;show_all(c);
+}
+bool panel_recordings_visible(void) { return s_page==P_RECORDINGS; }
 void panel_redraw(const ctl_t *c) { show_all(c); }
 
 void panel_open_memory(const ctl_t *c, bool save)
@@ -417,7 +480,37 @@ static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v;
 /* run key id; returns CTL_* bits. *page_change is set when the page must be rebuilt. */
 static int act(ctl_t *c, int id, bool *page_change)
 {
-    if (id == K_BACK) { s_page = P_MENU; *page_change = true; return 0; }
+    if(s_page==P_RECORDINGS) {
+        if(s_delete_confirm) {
+            if(id==K_SD_CONFIRM || id==K_SD_CANCEL || id==K_BACK) {
+                s_delete_confirm=false;*page_change=true;
+                return id==K_SD_CONFIRM ? CTL_SD_DELETE : 0;
+            }
+            return 0;
+        }
+        if(id==K_SD_DELETE && c->audio_file>=0 && c->audio_file<c->sd_audio.count) {
+            snprintf(c->audio_delete_name,sizeof c->audio_delete_name,"%s",c->audio_selected_name);
+            s_delete_confirm=true;*page_change=true;return 0;
+        }
+        if(id==K_SD_REFRESH) return CTL_SD_REFRESH;
+        if(id==K_SD_RECORD) return CTL_SD_RECORD;
+        if(id==K_SD_PLAY) return CTL_SD_PLAY;
+        if(id==K_SD_STOP) return CTL_SD_STOP;
+        if(id>=K_SD_FILE && id<K_SD_FILE+4) {
+            c->audio_file=s_audio_page*4+id-K_SD_FILE;
+            snprintf(c->audio_selected_name,sizeof c->audio_selected_name,"%s",c->sd_audio.files[c->audio_file]);
+            *page_change=true;return 0;
+        }
+        if(id==K_SD_PREV && s_audio_page==0 && c->sd_audio.batch>0) return CTL_SD_PREV;
+        if(id==K_SD_NEXT && (s_audio_page+1)*4>=c->sd_audio.count && c->sd_audio.more) return CTL_SD_NEXT;
+        if(id==K_SD_PREV || id==K_SD_NEXT) {
+            s_audio_page=clampi(s_audio_page+(id==K_SD_NEXT ? 1:-1),0,c->sd_audio.count ? (c->sd_audio.count-1)/4:0);
+            *page_change=true;return 0;
+        }
+        if(id==K_BACK) {s_page=P_MENU;*page_change=true;return CTL_SD_STOP;}
+    }
+    if (id == K_BACK) { s_page = s_page == P_DIAG ? P_RF : P_MENU; *page_change = true; return 0; }
+    if (id == K_HF_DIAG) { s_page = P_DIAG; *page_change = true; return 0; }
     if (id == K_DONE) return CTL_CLOSE;
     if (id == K_WIFI) return CTL_WIFI;
     if (id == K_BLE) return CTL_BLE;

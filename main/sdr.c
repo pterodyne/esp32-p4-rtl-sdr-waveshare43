@@ -29,6 +29,24 @@ static volatile uint64_t s_wr;                /* total bytes written into the ri
 static volatile bool s_streaming;
 static TaskHandle_t s_rx_task, s_waiter;
 static uint32_t s_freq = 100000000, s_rate = SDR_SAMPLE_RATE;
+static hf_diag_state_t s_hf_diag; /* UI task owns tuning and menu reads */
+
+static void capture_tune(uint32_t hz, int rc)
+{
+    rtlsdr_r82xx_tune_diag_t low;
+    hf_diag_tuner_t tuner = {.pll = -1};
+    if (rtlsdr_get_r82xx_tune_diag(s_dev, &low) == 0) {
+        tuner.tuner_hz = low.tuner_hz;
+        tuner.lo_hz = low.lo_hz;
+        tuner.pll = low.pll;
+        tuner.gpio5_attempted = low.gpio5_attempted != 0;
+        tuner.gpio5_rc = low.gpio5_rc;
+        tuner.gpio5_level = low.gpio5_level;
+    }
+    hf_diag_tune(&s_hf_diag, hz, rc, tuner);
+}
+
+hf_diag_state_t sdr_hf_diag_snapshot(void) { return s_hf_diag; }
 
 /* counter-mode check state */
 static bool s_check;
@@ -102,12 +120,16 @@ bool sdr_open(uint32_t timeout_ms, char *desc, size_t desc_len)
     int r = rtlsdr_open(&s_dev, 0);
     esp_log_level_set("USBH", ESP_LOG_WARN);
     if (r < 0) { ESP_LOGE(TAG, "rtlsdr_open %d", r); s_dev = NULL; return false; }
+    memset(&s_hf_diag, 0, sizeof s_hf_diag); /* reconnect is a new device/identity */
     rtlsdr_set_sample_rate(s_dev, s_rate);
-    rtlsdr_set_center_freq(s_dev, s_freq);
+    int tune_rc = rtlsdr_set_center_freq(s_dev, s_freq);
+    capture_tune(s_freq, tune_rc);
     char manufacturer[256] = {0}, product[256] = {0};
-    if (rtlsdr_get_usb_strings(s_dev, manufacturer, product, NULL) < 0) {
+    bool strings_ok = rtlsdr_get_usb_strings(s_dev, manufacturer, product, NULL) == 0;
+    if (!strings_ok) {
         manufacturer[0] = product[0] = 0;
     }
+    hf_diag_identity(&s_hf_diag, manufacturer, product, strings_ok);
     s_direct_supported = rf_direct_sampling_supported(rtlsdr_get_tuner_type(s_dev), manufacturer, product);
     if (!s_direct_supported) s_direct_mode = 0;
     else if (s_direct_mode && rtlsdr_set_direct_sampling(s_dev, s_direct_mode)) {
@@ -148,6 +170,7 @@ bool sdr_close(void)
     }
     if (s_dev) rtlsdr_close(s_dev);
     s_dev = NULL;
+    memset(&s_hf_diag, 0, sizeof s_hf_diag);
     s_bias.command_ok = false;
     s_bias_forced = s_direct_supported = false;
     return true;
@@ -196,7 +219,10 @@ void sdr_set_freq(uint32_t hz)
     if (hz < 500000) hz = 500000;           /* V4: HF via upconversion from 500 kHz */
     if (hz > 1766000000) hz = 1766000000;
     s_freq = hz;
-    if (s_dev) rtlsdr_set_center_freq(s_dev, hz);
+    if (s_dev) {
+        int rc = rtlsdr_set_center_freq(s_dev, hz);
+        capture_tune(hz, rc);
+    }
 }
 
 uint32_t sdr_freq(void) { return s_freq; }

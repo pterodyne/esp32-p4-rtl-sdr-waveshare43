@@ -8,4 +8,5 @@ int tune_step_index(int raw);                 /* sanitize persisted index */
 uint32_t tune_step_hz(int index);
 const char *tune_step_label(int index);
 int tune_step_next(int index);
+int tune_step_previous(int index);
 uint32_t tune_step_offset(uint32_t freq, int index, int direction);

@@ -1,4 +1,5 @@
 #include <math.h>
+#include "battery_voltage.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -153,7 +154,11 @@ static int s_hdr_h, s_spec_h;                /* the theme's, plus the portrait e
 typedef struct { int x, y, w, h; const char *label; } button_t;
 static button_t s_btn[VIEW_NBTN];
 static char s_step_text[20] = "STEP 10k";
+#ifdef CONFIG_SDR_WAVESHARE_43
+static char s_step_down_text[24] = "- STEP 10k", s_step_up_text[24] = "STEP 10k +";
+#endif
 static int s_touch_mode;                    /* ephemeral Freeform/Snap/Peak */
+static int s_zoom_cycle = -1;               /* header ZOOM key: current preset, -1 = not set yet */
 static int s_ro_x0, s_ro_x1;                 /* room for the frequency readout */
 
 static uint32_t s_rate, s_span, s_pb_hz = 200000;   /* sample rate, shown width, shaded passband */
@@ -165,6 +170,8 @@ static float s_ref = -20, s_range = 60;                /* manual: top of the sca
 static uint16_t *s_hdr, *s_axis, *s_spec;
 static uint16_t *s_audio_ctrl;
 static bool s_footer_valid, s_muted;
+static bool s_recording;
+void view_set_recording(bool active) { s_recording=active; }
 static int s_footer_vol, s_footer_sql, s_footer_bw, s_footer_zoom, s_footer_pressed;
 static uint16_t *s_wf;                       /* 2*wf_h rows, each line stored twice */
 static int s_wf_head;
@@ -274,7 +281,16 @@ void view_set_fine_tune(bool fine) { s_fine_tune = fine; }
 void view_set_tune_step(const char *label)
 {
     snprintf(s_step_text, sizeof s_step_text, "STEP %s", label ? label : "10k");
+#ifdef CONFIG_SDR_WAVESHARE_43
+    snprintf(s_step_down_text, sizeof s_step_down_text, "- %s", s_step_text);
+    snprintf(s_step_up_text, sizeof s_step_up_text, "%s +", s_step_text);
+#endif
     view_footer_invalidate();
+}
+
+void view_set_zoom_cycle(int zoom)
+{
+    s_zoom_cycle = zoom >= 0 && zoom < PANEL_ZOOMS ? zoom : 0;
 }
 
 void view_set_audio(const char *label, bool live)
@@ -317,14 +333,7 @@ int view_mode_button_at(int x, int y)
 
 int view_zoom_button_at(int x, int y)
 {
-#ifdef CONFIG_SDR_WAVESHARE_43
-    int mw = LCD_W - AUDIO_CTRL_W - 18;
-    y -= LCD_H - FOOTER_H;
-    if (y >= 4 && y < 32) {
-        if (x >= 6 && x < 54) return VIEW_ZOOM_DN;
-        if (x >= mw - 48 && x < mw) return VIEW_ZOOM_UP;
-    }
-#endif
+    /* Footer zoom was moved to the single header cycling key. */
     return -1;
 }
 
@@ -348,24 +357,6 @@ void view_audio_controls(int vol, int sql, int bw, int zoom, int pressed)
     rpi_canvas_t c = {s_audio_ctrl, LCD_W, FOOTER_H};
     rpi_cv_fill(&c, 0, 0, LCD_W, FOOTER_H, T->plate);
     rpi_cv_fill(&c, 0, 0, LCD_W, 1, T->hdr_line);
-#ifdef CONFIG_SDR_WAVESHARE_43
-    int mw = LCD_W - AUDIO_CTRL_W - 18;
-    static const char *zoom_labels[PANEL_ZOOMS] = {"2.4 MHz", "1.2 MHz", "600 kHz", "300 kHz"};
-    int z = zoom >= 0 && zoom < PANEL_ZOOMS ? zoom : 0;
-    char zl[24];
-    snprintf(zl, sizeof zl, "ZOOM %s", zoom_labels[z]);
-    for (int i = 0; i < 2; i++) {
-        int bx = i ? mw - 48 : 6;
-        int id = i ? VIEW_ZOOM_UP : VIEW_ZOOM_DN;
-        bool on = pressed == id;
-        rpi_cv_rrect(&c, bx, 4, 48, 28, T->hdr == HDR_PORTAPACK ? 0 : 4,
-                     on ? T->btn_on : T->btn);
-        const char *sign = i ? "+" : "-";
-        rpi_cv_text(&c, bx + (48 - rpi_cv_text_w(sign, 1)) / 2, 10,
-                    sign, on ? btn_text(true) : T->txt, 1);
-    }
-    rpi_cv_text(&c, 60 + (mw - 114 - rpi_cv_text_w(zl, 1)) / 2, 10, zl, T->txt, 1);
-#endif
     static const char *modes[PANEL_BWS] = {"WFM", "NFM25", "NFM12", "AM", "USB", "LSB"};
     for (int i = 0; i < PANEL_BWS && mode_cols(); i++) {
         button_t b = mode_button(i);
@@ -405,7 +396,7 @@ void view_audio_controls(int vol, int sql, int bw, int zoom, int pressed)
         button_t b = s_btn[i];
         if (!b.w || b.y < LCD_H - TUNE_BAR_H) continue;
         b.y -= LCD_H - FOOTER_H;
-        bool on = i == VIEW_STEP || i == pressed;
+        bool on = i == pressed;
         rpi_cv_rrect(&c, b.x, b.y, b.w, b.h, 5, on ? T->btn_on : T->btn);
         rpi_cv_text(&c, b.x + (b.w - rpi_cv_text_w(b.label, 1)) / 2,
                     b.y + (b.h - 16) / 2, b.label, on ? btn_text(true) : T->txt, 1);
@@ -458,15 +449,28 @@ static void layout(void)
     const int y = T->btn_y, h = T->btn_h;
     memset(s_btn, 0, sizeof s_btn);
 #ifdef CONFIG_SDR_WAVESHARE_43
-    s_btn[VIEW_TOUCH_MODE] = (button_t){4, y, 74, h, NULL};
+    s_btn[VIEW_TOUCH_MODE] = (button_t){4, y, LCD_PORTRAIT ? 66 : 74, h, NULL};
+    s_btn[VIEW_RANGE_RESET] = (button_t){LCD_PORTRAIT ? 74 : 82, y,
+                                        LCD_PORTRAIT ? 56 : 72, h, NULL};
+    s_btn[VIEW_AGC_CYCLE] = (button_t){LCD_PORTRAIT ? 134 : 158, y,
+                                      64, h, NULL};
+    /* After GAIN, before the readout: the widest readout is centred far to its right. */
+    s_btn[VIEW_ZOOM_TOGGLE] = (button_t){LCD_PORTRAIT ? 202 : 226, y, 64, h, NULL};
+    s_btn[VIEW_PRESETS] = (button_t){LCD_PORTRAIT ? 270 : 294, y, 64, h, "PRESETS"};
+    s_btn[VIEW_RECORD] = (button_t){LCD_PORTRAIT ? 338 : 362, y, 36, h, NULL};
+    s_btn[VIEW_PLAY] = (button_t){LCD_PORTRAIT ? 378 : 402, y, 40, h, NULL};
     int row_y = LCD_H - TUNE_BAR_H + 3;
     s_btn[VIEW_DN1M] = (button_t){4, row_y, 86, TUNE_BAR_H - 6, "<"};
-    s_btn[VIEW_STEP] = (button_t){96, row_y, LCD_W - 192, TUNE_BAR_H - 6, s_step_text};
+    int mid = LCD_W / 2;
+    s_btn[VIEW_STEP_DOWN] = (button_t){96, row_y, mid - 98, TUNE_BAR_H - 6, s_step_down_text};
+    s_btn[VIEW_STEP] = (button_t){mid + 2, row_y, LCD_W - 98 - mid, TUNE_BAR_H - 6, s_step_up_text};
     s_btn[VIEW_UP1M] = (button_t){LCD_W - 90, row_y, 86, TUNE_BAR_H - 6, ">"};
-    s_btn[VIEW_GAIN] = (button_t){LCD_W - 62, y, 56, h, NULL};
-    s_hdr_h = T->hdr_h;
+    int menu_x = s_btn[VIEW_PLAY].x + s_btn[VIEW_PLAY].w + 4;
+    s_btn[VIEW_GAIN] = (button_t){menu_x, y, LCD_W - 4 - menu_x, h, NULL};
+    s_hdr_h = T->hdr_h + PORT_KEYS;
     s_spec_h = T->spec_h + (LCD_PORTRAIT ? PORT_SPEC : 0);
-    s_ro_x0 = 82; s_ro_x1 = LCD_W - 70;
+    s_ro_x0 = 8;
+    s_ro_x1 = LCD_W - 158;
     return;
 #else
     if (!LCD_PORTRAIT) {
@@ -518,6 +522,8 @@ void view_reset(void)
 {
     s_have = false;
     view_peak_invalidate();
+    s_wf_head = 0;
+    memset(s_wf, 0, 2 * MAX_WF_H * LCD_LONG * 2);
     rpi_lcd_fill_rect(0, s_spec_y, LCD_W, s_spec_h, T->bg);
     rpi_lcd_fill_rect(0, s_wf_y, LCD_W, s_wf_h, 0);
 }
@@ -687,18 +693,45 @@ void view_header(uint32_t freq, const char *gain, int pressed)
         if (!b->w || b->y >= s_hdr_h) continue;
         bool on = i == pressed || i == VIEW_STEP; /* selected step is always indicated */
         button(&c, b, on);
-        if (i == VIEW_TOUCH_MODE) {
+        if (i == VIEW_RECORD || i == VIEW_PLAY) {
+            int cx=b->x+b->w/2, cy=b->y+7;
+            uint16_t ink=i==VIEW_RECORD ? RGB565(255,48,48) : btn_text(on);
+            if(i==VIEW_RECORD && s_recording) rpi_cv_fill(&c,cx-5,cy-5,10,10,ink);
+            else for(int dy=-5;dy<=5;dy++) {
+                int half=i==VIEW_RECORD ? (int)sqrtf(25-dy*dy) : 5-abs(dy);
+                int x=i==VIEW_RECORD ? cx-half : cx-5;
+                rpi_cv_fill(&c,x,cy+dy,2*half+1,1,ink);
+            }
+            const char *label=i==VIEW_PLAY ? "PLAY" : s_recording ? "STOP" : "REC";
+            rpi_cv_text(&c,b->x+(b->w-rpi_cv_text_w(label,1))/2,b->y+b->h-16,label,btn_text(on),1);
+        } else if (i == VIEW_TOUCH_MODE) {
             static const char *names[] = {"FREEFORM", "SNAP", "PEAK"};
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w("TOUCH", 1)) / 2,
                         b->y + 1, "TOUCH", btn_text(on), 1);
             const char *name = names[s_touch_mode];
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(name, 1)) / 2,
                         b->y + b->h - 17, name, btn_text(on), 1);
+        } else if (i == VIEW_AGC_CYCLE || i == VIEW_RANGE_RESET) {
+            const char *title = i == VIEW_AGC_CYCLE ? "GAIN" : "AUTO";
+            char short_gain[8];
+            if (gain[0] >= '0' && gain[0] <= '9')
+                snprintf(short_gain, sizeof short_gain, "%ddB", atoi(gain));
+            else snprintf(short_gain, sizeof short_gain, "%s", gain);
+            const char *sub = i == VIEW_AGC_CYCLE ? short_gain : "RESET";
+            rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(title, 1)) / 2,
+                        b->y + 1, title, btn_text(on), 1);
+            rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(sub, 1)) / 2,
+                        b->y + b->h - 17, sub, btn_text(on), 1);
+        } else if (i == VIEW_ZOOM_TOGGLE) {    /* cycles the FFT span forward; label = current preset */
+            static const char *zoom_short[PANEL_ZOOMS] = {"2.4M", "1.2M", "600k", "300k"};
+            int z = s_zoom_cycle >= 0 && s_zoom_cycle < PANEL_ZOOMS ? s_zoom_cycle : 0;
+            rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w("ZOOM", 1)) / 2,
+                        b->y + 1, "ZOOM", btn_text(on), 1);
+            rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(zoom_short[z], 1)) / 2,
+                        b->y + b->h - 17, zoom_short[z], btn_text(on), 1);
         } else if (i == VIEW_GAIN) {             /* opens Controls; shows the gain underneath */
-            int ty = b->y + (b->h - 32) / 2;
+            int ty = b->y + (b->h - 16) / 2;
             rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w("MENU", 1)) / 2, ty, "MENU", btn_text(on), 1);
-            rpi_cv_text(&c, b->x + (b->w - rpi_cv_text_w(gain, 1)) / 2, ty + 15, gain,
-                        on || T->hdr == HDR_VINTAGE ? btn_text(on) : T->dim, 1);
         } else {
 #ifndef CONFIG_SDR_WAVESHARE_43
             static const char *fine[] = {"-1k", "-100", "+100", "+1k", NULL, NULL};
@@ -713,7 +746,19 @@ void view_header(uint32_t freq, const char *gain, int pressed)
         }
     }
 
+#ifdef CONFIG_SDR_WAVESHARE_43
+    int mv = battery_voltage_get(), level = battery_level(mv);
+    uint16_t ink = level < 0 ? T->dim : level == 0 ? RGB565(255,64,64) :
+                   level == 1 ? RGB565(255,190,40) : RGB565(64,230,96);
+    char bat[20] = "BAT --.--V";
+    if (mv >= 0) snprintf(bat,sizeof bat,"BAT %d.%02dV",mv/1000,(mv%1000)/10);
+    rpi_cv_text(&c,LCD_W-150,T->hdr_h+12,bat,ink,1);
+#endif
     int x0 = s_ro_x0, x1 = s_ro_x1;
+    int readout_y = T->btn_y;
+#ifdef CONFIG_SDR_WAVESHARE_43
+    readout_y = T->hdr_h + 4;
+#endif
     int mhz_w = 4 + rpi_cv_text_w("MHz", 1);
     if (T->hdr == HDR_PORTAPACK) {           /* plain 16x32 digits, zero padded */
         char f[16];
@@ -722,10 +767,10 @@ void view_header(uint32_t freq, const char *gain, int pressed)
                      freq / 1000000 % 10000, freq / 1000 % 1000, freq / 100 % 10);
         else snprintf(f, sizeof f, "%4" PRIu32 ".%03" PRIu32, freq / 1000000 % 10000, freq / 1000 % 1000);
         int w = rpi_cv_text_w(f, 2) + mhz_w, x = x0 + (x1 - x0 - w) / 2;
-        x = rpi_cv_text(&c, x, T->btn_y, f, T->freq, 2);
-        rpi_cv_text(&c, x + 4, T->btn_y + 14, "MHz", T->dim, 1);
+        x = rpi_cv_text(&c, x, readout_y, f, T->freq, 2);
+        rpi_cv_text(&c, x + 4, readout_y + 14, "MHz", T->dim, 1);
     } else {
-        int y = T->btn_y + (T->btn_h - SEG_H) / 2;
+        int y = readout_y + (T->btn_h - SEG_H) / 2;
         int frac_w = show_fraction ? 2 + rpi_cv_text_w("0", 1) : 0;
         int x = x0 + (x1 - x0 - SEG_FREQ_W - frac_w - mhz_w) / 2;
         if (T->hdr == HDR_VINTAGE) {         /* dark glass window */
@@ -746,11 +791,16 @@ void view_header(uint32_t freq, const char *gain, int pressed)
 
 int view_button_at(int x, int y)
 {
-    if (y < 0 || y >= LCD_H) return -1;
+    if (x < 0 || x >= LCD_W || y < 0 || y >= LCD_H) return -1;
     for (int i = 0; i < VIEW_NBTN; i++) {
         const button_t *b = &s_btn[i];
         if (!b->w) continue;
+#ifdef CONFIG_SDR_WAVESHARE_43
+        /* Adjacent controls own only their painted rectangle, never a neighbour's gap. */
+        if (x >= b->x && x < b->x + b->w && y >= b->y && y < b->y + b->h) return i;
+#else
         if (x >= b->x - 2 && x < b->x + b->w + 2 && y >= b->y - 4 && y < b->y + b->h + 4) return i;
+#endif
     }
     return -1;
 }

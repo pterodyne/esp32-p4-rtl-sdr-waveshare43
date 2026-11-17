@@ -17,6 +17,7 @@
 
 static const char *TAG = "sdcard";
 static SemaphoreHandle_t s_lock;
+static portMUX_TYPE s_init_mux = portMUX_INITIALIZER_UNLOCKED;
 static int s_users;
 static sdmmc_card_t *s_card;
 static sd_pwr_ctrl_handle_t s_pwr;
@@ -24,7 +25,9 @@ static sd_pwr_ctrl_handle_t s_pwr;
 static void lock(void)
 {
     static StaticSemaphore_t buf;
-    if (!s_lock) s_lock = xSemaphoreCreateMutexStatic(&buf);   /* first call is from the UI task */
+    taskENTER_CRITICAL(&s_init_mux);
+    if (!s_lock) s_lock = xSemaphoreCreateMutexStatic(&buf);
+    taskEXIT_CRITICAL(&s_init_mux);
     xSemaphoreTake(s_lock, portMAX_DELAY);
 }
 

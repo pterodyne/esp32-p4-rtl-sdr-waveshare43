@@ -17,6 +17,9 @@
 #include "es8311_codec.h"
 #include "sdr.h"
 #include "audio.h"
+#include "sd_audio.h"
+#include "wav_audio.h"
+_Static_assert(DEMOD_OUT_RATE == WAV_AUDIO_RATE, "SD WAV rate must match codec and DSP");
 #include "audio_pause_gate.h"
 #include "audio_output_policy.h"
 
@@ -85,6 +88,13 @@ static void audio_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
+        if (sd_audio_output_exclusive()) {
+            memset(pcm, 0, 96 * sizeof *pcm);
+            sd_audio_exchange(pcm, 96);
+            esp_codec_dev_write(s_dev, pcm, 96 * sizeof *pcm);
+            was_paused = true;
+            continue;
+        }
         uint64_t total = sdr_total_bytes();
         if (was_paused || total - pos > LAG_MAX) {           /* (re)start a little behind */
             pos = total > LAG_KEEP ? (total - LAG_KEEP) & ~1ULL : 0;
@@ -97,6 +107,7 @@ static void audio_task(void *arg)
         int k = demod_process(iq, n / 2, pcm);
         busy += esp_timer_get_time() - t0;
         s_open = demod_open();
+        if (k) sd_audio_exchange(pcm, k);
         if (k) esp_codec_dev_write(s_dev, pcm, k * sizeof(int16_t));   /* blocks while the buffer is full */
     }
 }

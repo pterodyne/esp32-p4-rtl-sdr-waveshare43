@@ -19,8 +19,10 @@ reported to flash every few seconds. The revised UI stops waterfall blits
 sit to the left of VOL/SQL steppers. Footer drawing is cached when unchanged.
 This is host-tested and cross-built but **not yet verified on the board**; if
 flashing continues, inspect UART logs for stream restarts and USB errors.
-The Waveshare bottom tuning bar has two arrows and a highlighted STEP selector.
-Tap STEP to cycle 100 Hz, 1/5/9/10/12.5/25/50/100/500 kHz, 1 MHz and 5 MHz; hold an
+The header **ZOOM** key after GAIN cycles **2.4 MHz → 1.2 MHz → 600 kHz → 300 kHz → 2.4 MHz**; footer zoom +/- controls are removed. Capture stays at **2.4 MS/s**. FFT size is capped at **4096**, so 300 kHz does not improve FFT resolution beyond 600 kHz. This is host-tested, not hardware-verified.
+
+The Waveshare bottom tuning bar keeps two frequency-tuning arrows separate from
+a split STEP selector: left cycles steps down, right cycles them up through 100 Hz, 1/5/9/10/12.5/25/50/100/500 kHz, 1 MHz and 5 MHz; hold an
 arrow to repeat. Existing saved step IDs keep their original increments. The selected step is saved and the readout retains a 100 Hz
 digit if any adjustment leaves one. The frequency readout itself is not a look
 shortcut; use **MENU → LOOK** to change theme, which is committed immediately.
@@ -30,8 +32,27 @@ Only the upper spectrum waveform accepts touch tuning; the axis and waterfall
 are inert. FREEFORM retains the previous mode/zoom rounding, SNAP rounds to
 the saved bottom-bar STEP, and PEAK looks for the nearest qualifying local
 signal within 24 pixels of the press, at least 12 dB above the visible floor.
-With no qualifying peak it leaves the receiver where it is. TOUCH mode is not
-saved across restart. The [host-rendered screenshot gallery](docs/SCREENSHOTS.md)
+With no qualifying peak it leaves the receiver where it is. TOUCH mode is saved
+immediately in NVS and restored after restart. Header order is **TOUCH → AUTO RESET
+→ GAIN → ZOOM → PRESETS → ● REC → ▶ PLAY**, with battery/MENU separate and a second
+frequency row in both orientations. PRESETS reuses BAND; the red REC circle records
+live audio directly on the receiver and becomes a STOP square. PLAY opens the
+[SD listening-audio browser](docs/SD-AUDIO.md), finalizes recording and suppresses
+live RF throughout the page without globally muting playback; exiting preserves
+the user's previous mute/volume. **GAIN** cycles
+AGC and five manual targets (nearest 0/15/30/40 dB and MAX), resolved to the existing
+receiver gain table with duplicates skipped. **AUTO RESET** re-enables auto range
+and clears the spectrum's floor estimate and
+waterfall history; the next IQ frame establishes the new vertical scale. It does
+not retune the receiver or change its gain. These controls pass host tests
+and rev1/rev3 builds; the owner reports the final firmware works well.
+The battery field shows calibrated **BAT x.xxV** with rough voltage-based colors,
+or **BAT --.--V** when unavailable. This is terminal voltage, not measured SOC or
+charging status; see [battery implementation and limits](docs/TOPBAR-BATTERY-REPORT.md).
+The owner reports the final firmware works well and approves integration.
+This does not establish ADC accuracy against a meter or successful HF reception:
+the owner's V4 has no verified HF reception, including outside the P4.
+The [host-rendered screenshot gallery](docs/SCREENSHOTS.md)
 shows these layouts; confirm actual touch and RF selection on board.
 Use the footer or **MENU → AUDIO** for 3 kHz USB/LSB reception.
 The footer **MUTE/UNMUTE** key silences the speaker without losing the saved
