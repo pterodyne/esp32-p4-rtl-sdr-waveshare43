@@ -33,4 +33,5 @@ with wave.open(str(p),"rb") as w:
 print("Independent Python wave reader: 9644 bytes, RIFF/data sizes, 48k mono PCM16, exact captured samples passed")
 PY
 python3 tests/sd_audio_route_test.py
+python3 tests/fatfs_config_test.py
 printf 'Host SD audio tests passed; real WAV files retained at %s/host-card/AUDIO\n' "$root"
