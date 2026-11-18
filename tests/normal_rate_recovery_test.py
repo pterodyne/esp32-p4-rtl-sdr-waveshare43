@@ -38,6 +38,7 @@ static bool sdr_open(int t,void*d,int n){(void)t;(void)d;(void)n;opens++;return 
 static void vTaskDelay(int n){(void)n;}
 static void view_message(const char*a,const char*b){(void)a;(void)b;}
 static void audio_settings_try_save(bool b){(void)b;}
+static void hackrf_settings_try_save(bool b){(void)b;}
 static void poll_touch(void*c){(void)c;}
 static void view_reset(void){}
 static void draw_header(int n){(void)n;}

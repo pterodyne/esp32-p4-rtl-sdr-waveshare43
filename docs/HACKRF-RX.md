@@ -152,9 +152,17 @@ but the new 8 MHz streaming/PIE path is **not yet hardware-verified**.
   `?`, retains its previous desired value, and remains retryable at a limit.
   A failed paired shortcut conservatively marks both stages unknown.
 - Independent desired values survive reopen and are saved as a versioned atomic
-  `hrgain1` pair in NVS namespace `sdr`, using the existing three-second settings
-  debounce with write/commit retry. Immediate power removal before that save can
-  lose the latest adjustment. Missing/corrupt records default to L40/V0.
+  `hrgain1` pair in NVS namespace `sdr`. Each accepted main-screen LNA/VGA
+  adjustment and successful Controls paired shortcut commits promptly on the UI
+  task, without the general settings writer's three-second debounce. No flash
+  writes run in the audio or USB callback. Failed NVS open/set/commit keeps a
+  snapshot of the latest accepted pair pending for five-second retries; a new
+  accepted change retries immediately. Normal reception, stream-loss/reopen,
+  ADS-B, sensor and wireless-scan loops service retries, without replacing the
+  snapshot with temporary foreground gains. Blocking operations can delay retries.
+  A successful commit removes the intentional power-off window; power loss during
+  a write or before a failed write can be retried is **not** guaranteed to retain
+  the latest change. Missing/corrupt records default to L40/V0.
   HackRF does **not read or overwrite RTL's legacy `gaint` key**; the previous
   HackRF paired-total setting is not migrated because it cannot encode independent
   stages. Diagnostic sessions suppress saving the temporary pair. RF amp stays OFF.
@@ -169,6 +177,18 @@ but the new 8 MHz streaming/PIE path is **not yet hardware-verified**.
   unavailable; it does not invent loss counts, throughput or a poor-link result.
 
 ## Verification and remaining hardware work
+
+Immediate gain retention is host-tested by `tests/hackrf_gain_immediate_test.py`
+(included in `tools/test_hackrf.sh`). It compiles the actual UI save helpers and
+main-screen/Controls gain branches against a transactional NVS stub, discards
+uncommitted state and reloads `hrgain1` immediately. It covers rejected commands,
+open/set/commit failures, latest-change override, retry snapshot isolation from
+foreground gains, diagnostic suppression and foreground/recovery retry routes.
+All five `tools/test_*.sh` suites and HackRF/RTL rev1/rev3 builds passed with
+ESP-IDF v5.5.5; merged-image constituents were byte-compared at generated offsets.
+This is not a physical power-cycle or interrupted-flash-write test. Full merged
+images are local, Git-ignored `dist/` artifacts, flashed at `0x0` only with separate
+hardware authorization; full-image flashing can erase existing NVS settings.
 
 `sh tools/test_hackrf.sh` exercises real protocol byte packing/ack failures,
 signed-to-unsigned boundaries, rejection of TX mode, rate filtering, bias override

@@ -103,6 +103,10 @@ static bool s_nvs_ready;
 static int64_t s_save_at;
 static bool s_theme_save_failed;
 static audio_save_pending_t s_audio_pending;
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+static audio_save_pending_t s_hackrf_pending;
+static int s_hackrf_lna, s_hackrf_vga;
+#endif
 static screen_idle_t s_screen_idle;
 static peak_iq_gate_t s_peak_iq;
 static int64_t s_screen_save_at;
@@ -142,9 +146,6 @@ static void settings_maybe_save(bool force)
     nvs_set_u32(s_nvs, "freq", s_remote_active ? s_remote_saved_hz : sdr_freq());
 #ifndef CONFIG_SDR_BACKEND_HACKRF
     nvs_set_i32(s_nvs, "gaint", s_remote_active ? s_remote_saved_gain : sdr_gain_tenths(sdr_gain_index()));
-#else
-    if(!s_remote_active && hackrf_gain_save(s_nvs,sdr_stage_gain(true),sdr_stage_gain(false))!=ESP_OK)
-        settings_changed(); /* retain desired pair and retry failed write/commit */
 #endif
     nvs_set_i32(s_nvs, "theme", view_theme());
 #ifdef CONFIG_SDR_WAVESHARE_43
@@ -160,6 +161,36 @@ static void settings_maybe_save(bool force)
     ESP_LOGI(TAG, "saved %" PRIu32 " Hz, gain %s, zoom %d, bw %d", sdr_freq(),
              sdr_gain_label(sdr_gain_index()), s_ctl.zoom, s_ctl.bw);
 }
+
+/* UI-task only: capture accepted desired gains, not temporary foreground gains. */
+static void hackrf_settings_try_save(bool force)
+{
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    int64_t now = esp_timer_get_time();
+    if (!s_hackrf_pending.dirty || (!force && !audio_save_pending_due(&s_hackrf_pending, now))) return;
+    esp_err_t err = ESP_OK;
+    if (!s_nvs_ready) {
+        err = nvs_open("sdr", NVS_READWRITE, &s_nvs);
+        s_nvs_ready = err == ESP_OK;
+    }
+    if (err == ESP_OK) err = hackrf_gain_save(s_nvs, s_hackrf_lna, s_hackrf_vga);
+    audio_save_pending_result(&s_hackrf_pending, err == ESP_OK, now);
+    if (err != ESP_OK) ESP_LOGW(TAG, "HackRF gain save failed (%s); retry in 5 s", esp_err_to_name(err));
+#else
+    (void)force;
+#endif
+}
+
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+static void hackrf_settings_changed(void)
+{
+    if (s_remote_active) return;
+    s_hackrf_lna = sdr_stage_gain(true);
+    s_hackrf_vga = sdr_stage_gain(false);
+    audio_save_pending_mark(&s_hackrf_pending);
+    hackrf_settings_try_save(false);
+}
+#endif
 
 static int32_t nvs_int(const char *key, int32_t def)
 {
@@ -431,7 +462,7 @@ static void do_action(int act)
         int db=sdr_stage_gain(lna)+(act==VIEW_LNA_UP || act==VIEW_VGA_UP ? step : -step);
         if(db<0) db=0;
         if(db>max) db=max;
-        if(sdr_set_stage_gain(lna,db)) settings_changed();
+        if(sdr_set_stage_gain(lna,db)) hackrf_settings_changed();
         draw_header(act);
         return;
     }
@@ -630,6 +661,9 @@ static void panel_event(int ev, int x, int y, int64_t now)
     }
     if (ch & CTL_GAIN) {
         sdr_set_gain_index(s_ctl.gain_idx);
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+        if (sdr_stage_known(true) && sdr_stage_known(false)) hackrf_settings_changed();
+#endif
         draw_header(-1);
     }
     if (ch & CTL_BIAS) {
@@ -997,6 +1031,7 @@ static void adsb_mode(const touch_cal_t *cal)
         }
         int64_t now = esp_timer_get_time();
         audio_settings_try_save(false);
+        hackrf_settings_try_save(false);
         if (n < BUF || now - t_yield > 50000) { vTaskDelay(1); t_yield = now; }
         if (now - t_touch > 20000) {
             t_touch = now;
@@ -1074,6 +1109,7 @@ static void sensor_mode(const touch_cal_t *cal)
     const uint32_t previous_freq = sdr_freq();
     settings_maybe_save(true); /* never persist the sensor center as receiver frequency */
     audio_settings_try_save(true);
+    hackrf_settings_try_save(true);
     ESP_LOGI(TAG, "WH2 / Steelmate foreground decoder: 433.92 MHz");
     audio_pause(true);
     if (!audio_wait_paused(250)) {
@@ -1141,6 +1177,7 @@ static void sensor_mode(const touch_cal_t *cal)
         }
         int64_t now = esp_timer_get_time();
         audio_settings_try_save(false);
+        hackrf_settings_try_save(false);
         while (info.rows && sensor_event_expired(seen_us[info.rows - 1], (uint64_t)now)) {
             info.rows--;
             info.event[info.rows][0] = 0;
@@ -1240,6 +1277,7 @@ static void scan_mode(const touch_cal_t *cal, int kind)
     while (s_sv_action != SV_EXIT) {
         int64_t now = esp_timer_get_time();
         audio_settings_try_save(false);
+        hackrf_settings_try_save(false);
         if (ok) radio_scan_poll();
         s_sv_action = SV_NONE;
         poll_touch(cal);
@@ -1426,7 +1464,8 @@ void ui_run(const touch_cal_t *cal)
     sd_audio_init();
     s_ctl.audio_file = -1;
     for (;;) {
-        audio_settings_try_save(false); /* also retry while the SDR is lost */
+        audio_settings_try_save(false);
+        hackrf_settings_try_save(false); /* also retry while the SDR is lost */
         remote_diag_poll();
         if (!sdr_streaming()) peak_wait_fresh_iq(); /* before touch during recovery */
         poll_touch(cal); /* timeout/wake also work during stream loss */
@@ -1473,6 +1512,7 @@ normal_recovery:
             vTaskDelay(pdMS_TO_TICKS(2000));
             while (!sdr_open(5000, NULL, 0)) {
                 audio_settings_try_save(false);
+                hackrf_settings_try_save(false);
                 poll_touch(cal);
                 vTaskDelay(pdMS_TO_TICKS(1000));
             }
