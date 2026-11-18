@@ -19,3 +19,4 @@ cc -O2 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-field-initialize
 python3 tests/hackrf_gain_immediate_test.py
 python3 tests/narrow_zoom_test.py
 python3 tests/spectrum_columns_test.py
+python3 tests/ssb_audio_display_runtime_test.py
