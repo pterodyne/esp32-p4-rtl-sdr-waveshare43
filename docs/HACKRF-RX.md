@@ -3,9 +3,10 @@
 This is a selectable **receive-only** backend for the existing Waveshare
 ESP32-P4-WIFI6-Touch-LCD-4.3 BSP. It is a host-tested, cross-built experimental
 port. The owner reports working FM at **LNA 40 / VGA 62**; this is positive
-FM-only evidence, not validation of HF, other modes, or low-rate alias rejection.
+FM-only evidence on the previous low-rate path, not validation of this 8 MHz
+streaming/resampling path, HF, or other modes.
 No flashing, UART access, transmission, or RF measurements were performed
-for this UI change.
+for this capture/resampling change.
 The user's HackRF is connected to the P4's 40-pin USB-host data connection,
 not passed through to the Linux build host. This backend uses that same
 ESP-IDF USB Host controller and existing shim; it does not use host Linux USB.
@@ -55,31 +56,73 @@ submitted transfers before freeing them; close refuses to release a device
 still owned by RX. Disconnect/error ends RX and the existing UI recovery path
 closes/reopens the receiver. Reopen repeats the safety initialization.
 
-HackRF sends **signed interleaved 8-bit I/Q**. Every byte is XORed with 0x80
-before entering the existing unsigned-IQ PSRAM ring. Pair order is unchanged;
-odd-length completions are rejected rather than silently swapping I and Q.
-The ring is 1 MiB and its 64-bit publication counter is protected on the 32-bit P4.
+HackRF captures only **8 MS/s CS8** (signed interleaved I/Q), **16 MB/s USB**.
+There is no capture-rate menu and 2/2.4 MS/s are never sent to the hardware.
+Request 6 carries little-endian 8000000, divider 1. Request 7 selects **6 MHz**:
+this is the official libhackrf v2024.02.1 `max2837_ft` entry selected by its
+widest-filter-at-most-75%-of-Fs policy (not the old 1.75 MHz workaround).
 
-The DSP's native rate stays **2.4 MS/s** (4.8 MB/s USB IQ). ADS-B uses **2 MS/s**
-(4 MB/s), then restores the receiver rate. Both are programmed using HackRF's
-fractional-rate request: little-endian `freq_hz`, divider=1. The official firmware handler calls `sample_rate_frac_set(2 * freq_hz, divider)`
-in `firmware/common/hackrf_core.c`; this is not its separate fixed-rate
-`sample_rate_set` switch/table. Thus absence of 2.4 MS/s from that fixed table
-does not make the fractional-rate USB request unsupported.
-No silent 8 MS/s
-capture or incorrectly labelled decimation is substituted. Unsupported application
-rates and rate changes while RX is active are rejected.
+The existing DSP/ring contract remains **2.4 MS/s unsigned interleaved IQ**.
+A stateful, output-driven **3/10 polyphase FIR** converts from 8 MS/s. ADS-B
+requests **2 MS/s**, using a filtered **1/4** conversion, then restores 2.4.
+Each phase has 96 Q15 coefficients: normalized Blackman-windowed sinc,
+cutoff 1.05 MHz (normal) or 0.85 MHz (ADS-B). Conversion performs no DC
+subtraction or gain adjustment. Signed zero maps to 128, -128 to 0, +127 to
+255; FIR overshoot clips rather than wrapping. The fractional phase, history,
+and a pending I byte survive arbitrary USB splits, including odd lengths.
+Every start resets the FIR/queue. Retune quiesces/drains RX before programming
+and restarting; disconnect/reopen and rate changes also restart fresh. Output
+has the FIR's startup transient/group delay (~6 microseconds), not old RF history.
 
-**Important limitation:** the HackRF clock API accepts these low rates, but
-Great Scott Gadgets explicitly **does not recommend sampling below 8 MS/s**.
-The MAX5864 is not specified below 8 MHz and the MAX2837's minimum 1.75 MHz
-baseband filter provides insufficient anti-alias rejection at 2/2.4 MS/s.
-We select that minimum filter at both rates. Nearby strong signals may alias
-into the displayed spectrum/audio; sensitivity and decoder behavior are unknown.
-This is an explicit low-rate test compromise, not a claim that HackRF only
-supports 8/10/20 MS/s or that low-rate RF quality is guaranteed. A future
-production-quality path should capture >=8 MS/s and implement measured,
-anti-aliased conversion to the DSP rates, after proving USB/DMA/CPU headroom.
+The displayed zoom spans stay **2.4/1.2/0.6/0.3 MHz**; these are display spans,
+not hardware capture rates or a guarantee of flat response to the edges. The
+FIR has a transition near the 2.4 MHz span edges. Audio/FFT/sensor/ADS-B rates
+are not relabelled 8 MHz. Rate writes while the USB owner is alive are refused.
+A partial clock/filter failure retries the previous fixed hardware setup; if
+that also fails the rate getter reports 0 (unknown) and start is disabled.
+ADS-B enters only when the acknowledged output rate is 2 MHz; its restore path
+keeps RX/audio stopped if 2.4 MHz is not acknowledged. Independent LNA/VGA desired
+settings are restored on exit rather than lost through RTL's preset index.
+
+### Throughput and memory budget — NOT a P4 performance result
+
+- Ten 24 KiB DMA transfers remain **245760 bytes** of internal DMA payload
+  plus USB metadata/control allocations. At 16 MB/s each completes every
+  **1.536 ms** (~651 callbacks/s), with **15.36 ms** total queued payload.
+  The shared 64-entry completion queue exceeds the ten simultaneously owned
+  transfers; this does not prove the controller/PSRAM can sustain the load.
+- Callback does one bounded raw copy, no FIR and no queue wait. A **512 KiB
+  PSRAM SPSC queue** holds **32.768 ms** at 16 MB/s. Queue exhaustion stops and
+  drains RX, marks/logs overflow, and restarts through existing recovery. It
+  never silently concatenates IQ across a dropped raw block.
+- A separate priority-19 FIR task on core 1 consumes up to 24 KiB at a time;
+  USB owner/client remain on core 0. A 24 KiB PSRAM output scratch buffer is
+  reused; the existing 1 MiB CU8 ring holds ~218.45 ms at 4.8 MB/s or 262.14 ms
+  at 4 MB/s. Raw write+read traffic is 32 MB/s before output writes/reads,
+  display/audio/SD activity and caches. Startup allocates an extra worker
+  stack (4096 bytes), FIR state and task metadata, not a second DMA payload.
+- 96 taps require **460.8 million scalar MAC/s** for both channels at 2.4 MHz
+  (384 million at 2 MHz). A scalar P4 implementation would be inappropriate.
+  Firmware instead uses an unrolled P4 PIE signed-16 dot kernel: 24 eight-lane
+  MAC instructions plus 48 vector loads per complex output. Mirrored planar
+  internal history avoids inner-loop modulo and copying for each output.
+  Instructions are not cycles: load stalls, unaligned accesses, caller/input
+  overhead, scheduling and other DSP work are unmeasured. **No sustainable
+  P4 rate, CPU utilization, available DMA heap or drop-free claim is made.**
+- Before USB open, firmware tests the selected dot kernel against a scalar
+  oracle at all eight halfword alignments and refuses RX on mismatch. This is
+  a runtime safety gate, not a substitute for executing it on a board.
+- On stream exit, firmware logs accepted raw bytes/elapsed microseconds, worker
+  processing microseconds (including preemption), queue peak, max callback
+  microseconds and raw-overflow flag. These metrics and the existing USB stats
+  need sustained board measurements with waterfall/audio/SD and ADS-B active.
+  No raw sample sequence counter exists: zero local overflows still cannot
+  establish zero losses in HackRF firmware, USB/controller or upstream RF.
+
+Host measurements and exact test/build evidence are recorded in
+[8 MS/s verification report](HACKRF-8M-REPORT.md). Host throughput is not P4
+throughput. This replaces the previous experimental below-spec hardware clock,
+but the new 8 MHz streaming/PIE path is **not yet hardware-verified**.
 
 ## RF controls and safety
 
@@ -152,7 +195,7 @@ firmware/API and descriptors, negotiated HS on this header wiring, sufficient
 protected VBUS/current margin, sustained sample throughput and discontinuities,
 physical reconnect recovery, known-signal frequency accuracy, WFM/AM/SSB audio,
 ADS-B's 2 MS/s switch and recovery, sensor reception, actual antenna voltage OFF
-and ON, low-rate aliasing and runtime DMA/internal/PSRAM/CPU headroom. None has
+and ON, analog/digital alias rejection and runtime DMA/internal/PSRAM/CPU headroom. None has
 been measured here. Do not treat byte delivery alone as loss-free RF sampling.
 
 The future **7-inch** board is not ported: its exact model, panel/touch/BSP,

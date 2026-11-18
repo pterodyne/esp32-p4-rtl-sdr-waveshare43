@@ -16,4 +16,10 @@ assert 'sdr_set_stage_gain(lna,db)' in u
 assert 'view_set_stage_gains(sdr_stage_gain(true)' in u
 assert 'hackrf_gain_save' in u and 'hackrf_gain_load' in m
 assert '#ifndef CONFIG_SDR_BACKEND_HACKRF\n    nvs_set_i32(s_nvs, "gaint"' in u
-print('HackRF UI capability contracts PASS')
+adsb=u[u.index('static void adsb_mode('):u.index('static void sensor_mode(')]
+assert 'if (!sdr_request_sample_rate(ADSB_RATE)) goto adsb_restore;' in adsb
+assert adsb.index('if (!sdr_request_sample_rate(ADSB_RATE))') < adsb.index('adsb_init();')
+assert 'if (rate_restored)' in adsb
+assert 'sdr_set_stage_gain(true, saved_lna)' in adsb
+assert 'sdr_set_stage_gain(false, saved_vga)' in adsb
+print('HackRF UI capability and ADS-B rate gating contracts PASS')

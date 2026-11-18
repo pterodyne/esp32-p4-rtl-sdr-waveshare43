@@ -6,8 +6,9 @@ Fork of [John O'Dell's P4 SDR](https://github.com/John-ODell/esp32-p4-rtl-sdr)
 An experimental, selectable [HackRF One RX backend](docs/HACKRF-RX.md) is
 available with `SDR_BACKEND=hackrf tools/build_waveshare43.sh`. The normal/default
 build and RTL behavior described below are retained. HackRF uses manual LNA/VGA,
-no direct ADC, optional 3.3 V Bias-T, amp OFF and explicit experimental native
-2.4/2 MS/s rates. The owner reports working FM at LNA 40 / VGA 62; other RF
+no direct ADC, optional 3.3 V Bias-T, amp OFF and fixed native
+8 MS/s capture with filtered 2.4/2 MS/s DSP IQ. The new stream path has no
+hardware throughput/CPU/drop verification. The owner reports working FM at LNA 40 / VGA 62; other RF
 behavior is not established by that FM-only evidence. Independent LNA and VGA
 -/+ controls occupy the readout row in landscape, with a separate readout row
 in portrait; the header GAIN preset key is removed only on HackRF. RTL settings
@@ -29,7 +30,7 @@ reported to flash every few seconds. The revised UI stops waterfall blits
 sit to the left of VOL/SQL steppers. Footer drawing is cached when unchanged.
 This is host-tested and cross-built but **not yet verified on the board**; if
 flashing continues, inspect UART logs for stream restarts and USB errors.
-The header **ZOOM** key after GAIN cycles **2.4 MHz → 1.2 MHz → 600 kHz → 300 kHz → 2.4 MHz**; footer zoom +/- controls are removed. Capture stays at **2.4 MS/s**. FFT size is capped at **4096**, so 300 kHz does not improve FFT resolution beyond 600 kHz. This is host-tested, not hardware-verified.
+The header **ZOOM** key after GAIN cycles **2.4 MHz → 1.2 MHz → 600 kHz → 300 kHz → 2.4 MHz**; footer zoom +/- controls are removed. DSP IQ stays at **2.4 MS/s** (RTL captures 2.4; HackRF captures fixed 8 MS/s and FIR-resamples). FFT size is capped at **4096**, so 300 kHz does not improve FFT resolution beyond 600 kHz. This is host-tested, not hardware-verified.
 
 The Waveshare bottom tuning bar keeps two frequency-tuning arrows separate from
 a split STEP selector: left cycles steps down, right cycles them up through 100 Hz, 1/5/9/10/12.5/25/50/100/500 kHz, 1 MHz and 5 MHz; hold an

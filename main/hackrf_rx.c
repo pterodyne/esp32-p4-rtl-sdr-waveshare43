@@ -34,12 +34,13 @@ int hackrf_rx_safe(libusb_device_handle *h) {
     return a || b || c ? -1 : 0;
 }
 int hackrf_rx_rate(libusb_device_handle *h, uint32_t hz) {
-    /* Explicit application rates, supported by HackRF's fractional clock API.
-     * Below 8 MS/s is experimental: minimum analog filter BW is 1.75 MHz. */
-    if(hz!=2400000 && hz!=2000000) return -1;
+    /* Fixed native capture. libhackrf v2024.02.1 auto-filter selects the
+     * widest table entry <= 75% of Fs: 6 MHz at 8 MS/s. Digital FIR below
+     * supplies the much narrower application anti-alias filter. */
+    if(hz!=8000000) return -1;
     unsigned char p[8]; le32(p,hz); le32(p+4,1);
     if(out(h,6,0,0,p,8)) return -1;
-    unsigned bw=1750000;
+    unsigned bw=6000000;
     return out(h,7,bw&65535,bw>>16,0,0);
 }
 int hackrf_rx_tune(libusb_device_handle *h, uint32_t hz) {

@@ -42,9 +42,16 @@ uint64_t sdr_total_bytes(void);
 /* In-order reader: copy up to max bytes from stream byte *pos on and advance it. A reader that
  * fell a ring behind jumps ahead; the bytes skipped are added to *dropped. */
 size_t sdr_ring_read(uint8_t *dst, uint64_t *pos, size_t max, uint64_t *dropped);
-/* Stop the stream before changing it. Kept across sdr_close/sdr_open. */
+/* Application/ring IQ rate, NOT necessarily the hardware capture rate.
+ * Stop before changing it. Kept across close/open. HackRF captures fixed
+ * 8 MHz and reports 0 if its clock/filter state is unknown after failure. */
 void sdr_set_sample_rate(uint32_t hz);
 uint32_t sdr_sample_rate(void);
+/* Checked transition used by foreground DSP modes; never decode a mislabeled rate. */
+static inline bool sdr_request_sample_rate(uint32_t hz) {
+    sdr_set_sample_rate(hz);
+    return sdr_sample_rate() == hz;
+}
 /* Bias tee powers an active antenna/LNA; OFF by default on every device open.
  * A Blog EEPROM may force it ON independently of the UI. False = rejected/USB error. */
 bool sdr_set_bias_tee(bool on);

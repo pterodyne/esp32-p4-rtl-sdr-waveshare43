@@ -931,6 +931,9 @@ static void adsb_mode(const touch_cal_t *cal)
     assert(buf);
     const uint32_t freq = sdr_freq();
     const int gain = sdr_gain_index();
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    const int saved_lna = sdr_stage_gain(true), saved_vga = sdr_stage_gain(false);
+#endif
     ESP_LOGI(TAG, "ADS-B mode");
     audio_pause(true);
     sdr_stop();
@@ -951,7 +954,7 @@ static void adsb_mode(const touch_cal_t *cal)
             }
         }
     }
-    sdr_set_sample_rate(ADSB_RATE);
+    if (!sdr_request_sample_rate(ADSB_RATE)) goto adsb_restore;
     sdr_set_freq(1090000000);
     sdr_set_gain_index(sdr_gain_presets() - 1);
     sdr_start();
@@ -1018,15 +1021,22 @@ static void adsb_mode(const touch_cal_t *cal)
             t_log = now;
         }
     }
+adsb_restore:
     s_adsb = false;
     ESP_LOGI(TAG, "leaving ADS-B mode");
     sdr_stop();
     sdlog_end();
-    sdr_set_sample_rate(SDR_SAMPLE_RATE);
+    bool rate_restored = sdr_request_sample_rate(SDR_SAMPLE_RATE);
     sdr_set_freq(freq);
     sdr_set_gain_index(gain);
-    sdr_start();
-    audio_pause(false);
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    sdr_set_stage_gain(true, saved_lna);
+    sdr_set_stage_gain(false, saved_vga);
+#endif
+    if (rate_restored) {
+        sdr_start();
+        audio_pause(false);
+    } else ESP_LOGE(TAG, "receiver rate restore failed; RX/audio remain stopped");
     view_set_theme(view_theme());              /* clears the screen */
     apply_view();
     draw_header(-1);

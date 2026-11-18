@@ -22,12 +22,13 @@ int main(void) {
  unsigned char iq[]={0x80,0xff,0,0x7f};
  hackrf_rx_unsigned(iq,4);
  assert(iq[0]==0 && iq[1]==127 && iq[2]==128 && iq[3]==255);
- assert(hackrf_rx_rate(NULL,2400000)==0);
+ assert(hackrf_rx_rate(NULL,8000000)==0);
  assert(reqs[0]==6 && lens[0]==8 && dirs[0]==0x40);
- unsigned char rate[]={0,0x9f,0x24,0,1,0,0,0};
+ unsigned char rate[]={0,0x12,0x7a,0,1,0,0,0};
  assert(!memcmp(payload[0],rate,8));
- assert(reqs[1]==7 && vals[1]==(1750000&65535) && idxs[1]==(1750000>>16));
- assert(hackrf_rx_rate(NULL,2000000)==0);
+ assert(reqs[1]==7 && vals[1]==(6000000&65535) && idxs[1]==(6000000>>16));
+ assert(hackrf_rx_rate(NULL,8000000)==0);
+ int rejected=calls;assert(hackrf_rx_rate(NULL,2000000)<0 && hackrf_rx_rate(NULL,2400000)<0 && calls==rejected);
  int before=calls; assert(hackrf_rx_rate(NULL,12345)<0 && calls==before);
  assert(hackrf_rx_tune(NULL,1090000000)==0);
  unsigned char freq[]={0x42,4,0,0,0,0,0,0};
@@ -44,7 +45,7 @@ int main(void) {
  before=calls; assert(hackrf_rx_clear_bias_options(NULL,0x0107)==0 && calls==before);
  assert(hackrf_rx_clear_bias_options(NULL,0x0108)==0);
  assert(reqs[calls-1]==48 && vals[calls-1]==0x24);
- fail=1; assert(hackrf_rx_rate(NULL,2400000)<0);
+ fail=1; assert(hackrf_rx_rate(NULL,8000000)<0);
  fail=0; before=calls;
  assert(hackrf_rx_stage(NULL, true, 16)==0);
  assert(calls==before+1 && reqs[before]==19 && idxs[before]==16);

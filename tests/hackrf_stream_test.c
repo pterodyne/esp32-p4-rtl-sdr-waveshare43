@@ -27,7 +27,7 @@ int libusb_handle_events_timeout_completed(libusb_context *c,struct timeval *tv,
  return 0;
 }
 static void consume(unsigned char *p,uint32_t len,void *ctx) {
- (void)ctx;assert(len==4 && p[0]==0x80); /* conversion belongs to SDR ring sink */
+ (void)ctx;assert(len==(odd?3u:4u) && p[0]==0x80); /* conversion belongs to SDR ring sink */
  if(++delivered==5) hackrf_stream_stop();
 }
 int main(void) {
@@ -39,7 +39,7 @@ int main(void) {
  assert(n==0 && canceled);
  fail_submit=0;disconnect=1;canceled=0;hackrf_stream_prepare();
  assert(hackrf_stream_run(NULL,consume,NULL)<0 && n==0 && canceled);
- disconnect=0;odd=1;canceled=0;hackrf_stream_prepare();
- assert(hackrf_stream_run(NULL,consume,NULL)<0 && n==0 && canceled);
+ disconnect=0;odd=1;delivered=0;canceled=0;hackrf_stream_prepare();
+ assert(hackrf_stream_run(NULL,consume,NULL)==0 && delivered==5 && n==0 && canceled);
  puts("HackRF stream drain/restart/partial-submit/disconnect/odd-IQ tests PASS");
 }

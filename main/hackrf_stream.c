@@ -23,7 +23,7 @@ static void complete(struct libusb_transfer *t) {
         return;
     }
     if(atomic_load(&stop)) return;
-    if(t->actual_length<0 || t->actual_length>t->length || t->actual_length%2) {
+    if(t->actual_length<0 || t->actual_length>t->length) {
         s->error=-1; atomic_store(&stop,true); return;
     }
     if(t->actual_length) s->sink(t->buffer,t->actual_length,s->ctx);

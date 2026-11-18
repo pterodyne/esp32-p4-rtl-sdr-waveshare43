@@ -12,6 +12,7 @@
 #include "esp_heap_caps.h"
 #include "rtlsdr_usb.h"
 #include "hackrf_stream.h"
+#include "hackrf_resample.h"
 #include "sdr.h"
 #include "bias_state.h"
 
@@ -43,25 +44,89 @@ static const unsigned vga[]={0,0,0,0,0,0,16,32,62};
 static const char *labels[]={"L0 V0","L8 V0","L16 V0","L24 V0","L32 V0","L40 V0","L40 V16","L40 V32","L40 V62"};
 #define NGAINS ((int)(sizeof(lna)/sizeof(lna[0])))
 
+/* SPSC raw PSRAM queue. Completion copies only; overflow fails closed. */
+#define RAW_LEN (1u<<19)
+#define WORK_BYTES (24u*1024)
+static uint8_t *raw, *filtered;
+static atomic_uint raw_head, raw_tail;
+static atomic_bool raw_overflow, producer_done, worker_owned;
+static hackrf_resample_t resampler;
+/* Written by their respective owners; read only after both tasks stop. */
+static uint64_t raw_bytes, filter_us;
+static unsigned queue_peak, callback_max_us;
+static bool pipeline_reset(void) {
+    if(!raw) raw=heap_caps_calloc(1,RAW_LEN,MALLOC_CAP_SPIRAM);
+    if(!filtered) filtered=heap_caps_calloc(1,WORK_BYTES,MALLOC_CAP_SPIRAM);
+    if(!raw || !filtered || !hackrf_resample_init(&resampler,rate)) return false;
+    raw_bytes=filter_us=0;queue_peak=callback_max_us=0;
+    atomic_store(&raw_head,0);atomic_store(&raw_tail,0);
+    atomic_store(&raw_overflow,false);atomic_store(&producer_done,false);
+    return true;
+}
 static void rx_sink(unsigned char *p,uint32_t n,void *ctx) {
     (void)ctx;
-    hackrf_rx_unsigned(p,n);
+    int64_t begin=esp_timer_get_time();
+    unsigned h=atomic_load_explicit(&raw_head,memory_order_relaxed);
+    unsigned t=atomic_load_explicit(&raw_tail,memory_order_acquire);
+    if(n>RAW_LEN-(unsigned)(h-t)) {
+        atomic_store(&raw_overflow,true);hackrf_stream_stop();return;
+    }
+    unsigned off=h&(RAW_LEN-1),first=n<RAW_LEN-off?n:RAW_LEN-off;
+    memcpy(raw+off,p,first);if(first<n) memcpy(raw,p+first,n-first);
+    raw_bytes+=n;
+    if(h+n-t>queue_peak) queue_peak=h+n-t;
+    atomic_store_explicit(&raw_head,h+n,memory_order_release);
+    unsigned elapsed=esp_timer_get_time()-begin;
+    if(elapsed>callback_max_us) callback_max_us=elapsed;
+}
+static bool drain_once(void) {
+    unsigned t=atomic_load_explicit(&raw_tail,memory_order_relaxed);
+    unsigned h=atomic_load_explicit(&raw_head,memory_order_acquire);
+    unsigned n=h-t, off=t&(RAW_LEN-1);
+    if(n>WORK_BYTES) n=WORK_BYTES;
+    if(n>RAW_LEN-off) n=RAW_LEN-off;
+    if(!n) return false;
+    int64_t begin=esp_timer_get_time();
+    size_t count=hackrf_resample_process(&resampler,raw+off,n,filtered,WORK_BYTES);
+    if(count==SIZE_MAX) {atomic_store(&raw_overflow,true);hackrf_stream_stop();return false;}
     uint64_t w=sdr_total_bytes();
-    unsigned off=w&(RING_LEN-1),first=n<RING_LEN-off?n:RING_LEN-off;
-    memcpy(ring+off,p,first);
-    if(first<n) memcpy(ring,p+first,n-first);
-    portENTER_CRITICAL(&ring_lock); written=w+n; portEXIT_CRITICAL(&ring_lock);
+    unsigned dst=w&(RING_LEN-1),first=count<RING_LEN-dst?count:RING_LEN-dst;
+    memcpy(ring+dst,filtered,first);
+    if(first<count) memcpy(ring,filtered+first,count-first);
+    portENTER_CRITICAL(&ring_lock);written=w+count;portEXIT_CRITICAL(&ring_lock);
+    filter_us+=esp_timer_get_time()-begin;
+    atomic_store_explicit(&raw_tail,t+n,memory_order_release);
+    return true;
+}
+static void filter_task(void *arg) {
+    (void)arg;
+    while(!atomic_load(&producer_done) && !atomic_load(&raw_overflow)) {
+        if(!drain_once()) vTaskDelay(1);
+    }
+    atomic_store(&worker_owned,false);vTaskDelete(NULL);
 }
 static void rx_task(void *arg) {
     (void)arg;
-    int rc=hackrf_stream_run(dev,rx_sink,NULL);
+    int64_t begin=esp_timer_get_time();
+    atomic_store(&worker_owned,true);
+    int rc=-1;
+    /* Separate worker: FIR never runs in a USB completion. P4 load unmeasured. */
+    if(xTaskCreatePinnedToCore(filter_task,"hackrf_fir",4096,NULL,19,NULL,1)==pdPASS)
+        rc=hackrf_stream_run(dev,rx_sink,NULL);
+    else atomic_store(&worker_owned,false);
+    atomic_store(&producer_done,true);
+    while(atomic_load(&worker_owned)) vTaskDelay(1);
     atomic_store(&streaming,false);
-    ESP_LOGI(TAG,"RX ended (%d)",rc);
+    ESP_LOGI(TAG,"RX ended (%d), raw queue overflow %d",rc,(int)atomic_load(&raw_overflow));
+    ESP_LOGI(TAG,"RX measured: %llu raw B in %lld us, filter %llu us, queue peak %u/%u B, callback max %u us",
+        (unsigned long long)raw_bytes,(long long)(esp_timer_get_time()-begin),
+        (unsigned long long)filter_us,queue_peak,RAW_LEN,callback_max_us);
     atomic_store(&owner,false);
     vTaskDelete(NULL);
 }
 bool sdr_open(uint32_t timeout_ms,char *desc,size_t desc_len) {
     if(dev) return false;
+    if(!hackrf_resample_selftest()) {ESP_LOGE(TAG,"FIR kernel self-test failed: RX disabled");return false;}
     /* Independent desired stage values survive reopen. */
     if(!ring) ring=heap_caps_calloc(1,RING_LEN,MALLOC_CAP_SPIRAM);
     if(!ring || rtlsdr_usb_start()!=ESP_OK) return false;
@@ -79,7 +144,7 @@ bool sdr_open(uint32_t timeout_ms,char *desc,size_t desc_len) {
             if(libusb_validate_bulk_in(dev,0x81) || libusb_claim_interface(dev,0)) {
                 libusb_close(dev); dev=NULL; continue;
             }
-            if(hackrf_rx_clear_bias_options(dev,d.bcdDevice) || hackrf_rx_safe(dev) || hackrf_rx_rate(dev,rate) || hackrf_rx_tune(dev,freq) ||
+            if(hackrf_rx_clear_bias_options(dev,d.bcdDevice) || hackrf_rx_safe(dev) || hackrf_rx_rate(dev,HACKRF_NATIVE_RATE) || hackrf_rx_tune(dev,freq) ||
                hackrf_rx_gain(dev,stage_db[1],stage_db[0])) {
                 hackrf_rx_safe(dev);
                 libusb_release_interface(dev,0);libusb_close(dev);dev=NULL;continue;
@@ -88,8 +153,8 @@ bool sdr_open(uint32_t timeout_ms,char *desc,size_t desc_len) {
             memset(&diag,0,sizeof diag);
             hf_diag_identity(&diag,"Great Scott Gadgets","HackRF One (VID/PID)",false);
             bias=(bias_state_t){.on=false,.command_ok=true};
-            if(desc) snprintf(desc,desc_len,"HackRF One RX, %.1f MS/s",rate/1e6);
-            ESP_LOGW(TAG,"native low-rate RX %.1f MS/s: experimental below recommended 8 MS/s; amp OFF",rate/1e6);
+            if(desc) snprintf(desc,desc_len,"HackRF RX 8 MS/s -> %.1f MS/s IQ",rate/1e6);
+            ESP_LOGI(TAG,"native 8 MS/s CS8 (16 MB/s), FIR -> %.1f MS/s CU8; amp OFF",rate/1e6);
             break;
         }
         libusb_free_device_list(list,1);
@@ -110,7 +175,7 @@ bool sdr_close(void) {
     return true;
 }
 void sdr_start(void) {
-    if(!dev || !rate_ok || atomic_load(&owner)) return;
+    if(!dev || !rate_ok || atomic_load(&owner) || !pipeline_reset()) return;
     hackrf_stream_prepare();
     atomic_store(&owner,true);atomic_store(&streaming,true);
     if(xTaskCreatePinnedToCore(rx_task,"hackrf_rx",6144,NULL,20,NULL,0)!=pdPASS) {
@@ -135,8 +200,11 @@ void sdr_set_freq(uint32_t hz) {
     /* App's uint32 frequency/UI cannot expose HackRF's full 6 GHz range yet. */
     if(hz<1000000) hz=1000000;
     if(hz>1766000000) hz=1766000000;
+    bool restart=atomic_load(&owner);
+    if(restart) {sdr_stop();if(atomic_load(&owner)) return;}
     if(!dev || hackrf_rx_tune(dev,hz)==0) freq=hz;
     else ESP_LOGE(TAG,"tune command failed");
+    if(restart) sdr_start();
 }
 uint32_t sdr_freq(void) {return freq;}
 hf_diag_state_t sdr_hf_diag_snapshot(void) {return diag;}
@@ -170,15 +238,15 @@ void sdr_set_gain_tenths(int tenths) {
 void sdr_set_sample_rate(uint32_t hz) {
     if(hz!=2400000 && hz!=2000000) {ESP_LOGE(TAG,"unsupported application IQ rate");return;}
     if(atomic_load(&owner)) {ESP_LOGE(TAG,"stop RX before rate change");return;}
-    if(!dev || hackrf_rx_rate(dev,hz)==0) {rate=hz;rate_ok=true;}
+    if(!dev || hackrf_rx_rate(dev,HACKRF_NATIVE_RATE)==0) {rate=hz;rate_ok=true;}
     else {
         /* The clock write may have succeeded before the filter write failed.
          * Restore both, or refuse RX until reopen rather than feed mislabeled IQ. */
-        rate_ok=hackrf_rx_rate(dev,rate)==0;
+        rate_ok=hackrf_rx_rate(dev,HACKRF_NATIVE_RATE)==0;
         ESP_LOGE(TAG,"sample rate command failed; previous rate %s",rate_ok?"restored":"UNKNOWN: RX disabled");
     }
 }
-uint32_t sdr_sample_rate(void) {return rate;}
+uint32_t sdr_sample_rate(void) {return rate_ok || !dev ? rate : 0;}
 bool sdr_bias_tee(void) {return bias.on;}
 bool sdr_bias_command_ok(void) {return bias.command_ok;}
 bool sdr_bias_tee_forced(void) {return false;}
