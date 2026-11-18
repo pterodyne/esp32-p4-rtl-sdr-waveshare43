@@ -46,6 +46,11 @@ int hackrf_rx_tune(libusb_device_handle *h, uint32_t hz) {
     unsigned char p[8]; le32(p,hz/1000000); le32(p+4,hz%1000000);
     return out(h,16,0,0,p,8);
 }
+int hackrf_rx_stage(libusb_device_handle *h, bool lna, unsigned db) {
+    if(db > (lna ? 40u : 62u) || db % (lna ? 8u : 2u)) return -1;
+    unsigned char ok=0;
+    return libusb_control_transfer(h,0xc0,lna ? 19 : 20,0,db,&ok,1,1000)==1 && ok ? 0 : -1;
+}
 int hackrf_rx_gain(libusb_device_handle *h, unsigned lna, unsigned vga) {
     if(lna>40 || lna%8 || vga>62 || vga%2) return -1;
     unsigned char ok=0;

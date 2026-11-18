@@ -133,7 +133,11 @@ static const theme_t s_themes[] = {
 #define PORT_KEYS  40                        /* portrait: a row of step keys under the header */
 #define PORT_SPEC  24                        /* and a taller spectrum */
 #define MAX_SPEC_H (128 + PORT_SPEC)
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+#define MAX_HDR_H  (54 + PORT_KEYS + 40)
+#else
 #define MAX_HDR_H  (54 + PORT_KEYS)
+#endif
 #define MAX_AXIS_H 24
 #define MAX_WF_H   LCD_LONG
 #define AUDIO_CTRL_W 208
@@ -159,6 +163,11 @@ static char s_step_down_text[24] = "- STEP 10k", s_step_up_text[24] = "STEP 10k 
 #endif
 static int s_touch_mode;                    /* ephemeral Freeform/Snap/Peak */
 static int s_zoom_cycle = -1;               /* header ZOOM key: current preset, -1 = not set yet */
+static int s_stage_db[2]={40,0};
+static bool s_stage_ok[2];
+void view_set_stage_gains(int lna, int vga, bool lna_ok, bool vga_ok) {
+    s_stage_db[0]=lna; s_stage_db[1]=vga; s_stage_ok[0]=lna_ok; s_stage_ok[1]=vga_ok;
+}
 static int s_ro_x0, s_ro_x1;                 /* room for the frequency readout */
 
 static uint32_t s_rate, s_span, s_pb_hz = 200000;   /* sample rate, shown width, shaded passband */
@@ -471,6 +480,19 @@ static void layout(void)
     s_spec_h = T->spec_h + (LCD_PORTRAIT ? PORT_SPEC : 0);
     s_ro_x0 = 8;
     s_ro_x1 = LCD_W - 158;
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    /* Remove only HackRF preset shortcut; keep MENU in the top bar. */
+    s_btn[VIEW_AGC_CYCLE].w=0;
+    for(int i=VIEW_ZOOM_TOGGLE;i<=VIEW_RECORD;i++) s_btn[i].x-=68;
+    s_btn[VIEW_GAIN].x-=68; s_btn[VIEW_GAIN].w+=68;
+    int gy=T->hdr_h+4;
+    s_btn[VIEW_LNA_DN]=(button_t){4,gy,32,32,"-"};
+    s_btn[VIEW_LNA_UP]=(button_t){108,gy,32,32,"+"};
+    s_btn[VIEW_VGA_DN]=(button_t){148,gy,32,32,"-"};
+    s_btn[VIEW_VGA_UP]=(button_t){252,gy,32,32,"+"};
+    if(LCD_PORTRAIT) s_hdr_h+=40;
+    else s_ro_x0=296;
+#endif
     return;
 #else
     if (!LCD_PORTRAIT) {
@@ -756,12 +778,27 @@ void view_header(uint32_t freq, const char *gain, int pressed)
                    level == 1 ? RGB565(255,190,40) : RGB565(64,230,96);
     char bat[20] = "BAT --.--V";
     if (mv >= 0) snprintf(bat,sizeof bat,"BAT %d.%02dV",mv/1000,(mv%1000)/10);
-    rpi_cv_text(&c,LCD_W-150,T->hdr_h+12,bat,ink,1);
+    rpi_cv_text(&c,LCD_W-150,T->hdr_h+12
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+                +(LCD_PORTRAIT ? 40 : 0)
+#endif
+                ,bat,ink,1);
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    for(int st=0;st<2;st++) {
+        char label[16];
+        if(s_stage_ok[st]) snprintf(label,sizeof label,"%s %d",st ? "VGA" : "LNA",s_stage_db[st]);
+        else snprintf(label,sizeof label,"%s ?",st ? "VGA" : "LNA");
+        rpi_cv_text(&c,40+st*144,T->hdr_h+12,label,T->txt,1);
+    }
+#endif
 #endif
     int x0 = s_ro_x0, x1 = s_ro_x1;
     int readout_y = T->btn_y;
 #ifdef CONFIG_SDR_WAVESHARE_43
     readout_y = T->hdr_h + 4;
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    if(LCD_PORTRAIT) readout_y+=40;
+#endif
 #endif
     int mhz_w = 4 + rpi_cv_text_w("MHz", 1);
     if (T->hdr == HDR_PORTAPACK) {           /* plain 16x32 digits, zero padded */

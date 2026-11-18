@@ -25,8 +25,17 @@ static uint64_t written;
 static atomic_bool streaming, owner;
 static uint32_t freq=100000000,rate=SDR_SAMPLE_RATE;
 static bias_state_t bias;
-static int gain_idx, want_gain=400;
-static bool gain_ok, rate_ok;
+static int gain_idx;
+static bool rate_ok;
+static int stage_db[2]={0,40}; /* VGA, LNA; independent desired/applied values */
+static bool stage_ok[2];
+int sdr_stage_gain(bool lna) { return stage_db[lna]; }
+bool sdr_stage_known(bool lna) { return dev && stage_ok[lna]; }
+bool sdr_set_stage_gain(bool lna, int db) {
+    if(db<0 || db>(lna?40:62) || db%(lna?8:2)) return false;
+    if(dev && hackrf_rx_stage(dev,lna,db)) { stage_ok[lna]=false; return false; }
+    stage_db[lna]=db; stage_ok[lna]=dev!=NULL; return true;
+}
 static hf_diag_state_t diag;
 /* No AGC on HackRF. Explicit paired manual settings, amp always disabled. */
 static const unsigned lna[]={0,8,16,24,32,40,40,40,40};
@@ -53,7 +62,7 @@ static void rx_task(void *arg) {
 }
 bool sdr_open(uint32_t timeout_ms,char *desc,size_t desc_len) {
     if(dev) return false;
-    sdr_set_gain_tenths(want_gain);
+    /* Independent desired stage values survive reopen. */
     if(!ring) ring=heap_caps_calloc(1,RING_LEN,MALLOC_CAP_SPIRAM);
     if(!ring || rtlsdr_usb_start()!=ESP_OK) return false;
     int64_t until=esp_timer_get_time()+(int64_t)timeout_ms*1000;
@@ -71,11 +80,11 @@ bool sdr_open(uint32_t timeout_ms,char *desc,size_t desc_len) {
                 libusb_close(dev); dev=NULL; continue;
             }
             if(hackrf_rx_clear_bias_options(dev,d.bcdDevice) || hackrf_rx_safe(dev) || hackrf_rx_rate(dev,rate) || hackrf_rx_tune(dev,freq) ||
-               hackrf_rx_gain(dev,lna[gain_idx],vga[gain_idx])) {
+               hackrf_rx_gain(dev,stage_db[1],stage_db[0])) {
                 hackrf_rx_safe(dev);
                 libusb_release_interface(dev,0);libusb_close(dev);dev=NULL;continue;
             }
-            gain_ok=rate_ok=true;
+            rate_ok=true; stage_ok[0]=stage_ok[1]=true;
             memset(&diag,0,sizeof diag);
             hf_diag_identity(&diag,"Great Scott Gadgets","HackRF One (VID/PID)",false);
             bias=(bias_state_t){.on=false,.command_ok=true};
@@ -134,15 +143,22 @@ hf_diag_state_t sdr_hf_diag_snapshot(void) {return diag;}
 int sdr_gain_presets(void) {return NGAINS;}
 int sdr_gain_index(void) {return gain_idx;}
 const char *sdr_gain_label(int i) {
-    if(dev && i==gain_idx && !gain_ok) return "GAIN ?";
+    /* Current label reflects each independently acknowledged stage. */
+    if(i==gain_idx) {
+        static char label[24]; char a[8],b[8];
+        if(sdr_stage_known(true)) snprintf(a,sizeof a,"%d",stage_db[1]); else strcpy(a,"?");
+        if(sdr_stage_known(false)) snprintf(b,sizeof b,"%d",stage_db[0]); else strcpy(b,"?");
+        snprintf(label,sizeof label,"L%s V%s",a,b); return label;
+    }
     return i>=0 && i<NGAINS?labels[i]:"?";
 }
 int sdr_gain_tenths(int i) {return i>=0 && i<NGAINS?(int)(lna[i]+vga[i])*10:-1;}
 void sdr_set_gain_index(int i) {
     if(i<0 || i>=NGAINS) return;
-    if(dev && hackrf_rx_gain(dev,lna[i],vga[i])) {gain_ok=false;ESP_LOGE(TAG,"gain command failed; LNA/VGA state unknown");return;}
-    gain_ok=dev!=NULL;
-    gain_idx=i;want_gain=sdr_gain_tenths(i);
+    if(dev && hackrf_rx_gain(dev,lna[i],vga[i])) {stage_ok[0]=stage_ok[1]=false;ESP_LOGE(TAG,"gain command failed; LNA/VGA state unknown");return;}
+    gain_idx=i;
+    stage_db[1]=lna[i]; stage_db[0]=vga[i];
+    stage_ok[0]=stage_ok[1]=dev!=NULL;
 }
 void sdr_set_gain_tenths(int tenths) {
     /* Legacy saved AGC maps to manual L40/V0, never to fictitious HackRF AGC. */

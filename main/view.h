@@ -13,7 +13,7 @@
 
 enum { VIEW_DN1M, VIEW_DN100K, VIEW_UP100K, VIEW_UP1M, VIEW_DN100, VIEW_UP100,
        VIEW_STEP, VIEW_GAIN, VIEW_THEME, VIEW_TOUCH_MODE, VIEW_AGC_CYCLE, VIEW_RANGE_RESET,
-       VIEW_STEP_DOWN, VIEW_ZOOM_TOGGLE, VIEW_PRESETS, VIEW_PLAY, VIEW_RECORD, VIEW_NBTN,
+       VIEW_STEP_DOWN, VIEW_ZOOM_TOGGLE, VIEW_PRESETS, VIEW_PLAY, VIEW_RECORD, VIEW_LNA_DN, VIEW_LNA_UP, VIEW_VGA_DN, VIEW_VGA_UP, VIEW_NBTN,
        VIEW_VOL_DN, VIEW_VOL_UP, VIEW_SQL_DN, VIEW_SQL_UP, VIEW_MODE_0,
        VIEW_ZOOM_DN = VIEW_MODE_0 + 6, VIEW_ZOOM_UP, VIEW_MUTE };
 enum { VIEW_TOUCH_FREE, VIEW_TOUCH_SNAP, VIEW_TOUCH_PEAK };
@@ -31,6 +31,7 @@ int view_theme(void);
 void view_reset(void);                       /* forget floor/peaks (after a reopen) */
 /* pressed: the button being held, or -1. */
 void view_header(uint32_t freq, const char *gain, int pressed);
+void view_set_stage_gains(int lna, int vga, bool lna_ok, bool vga_ok);
 void view_axis(uint32_t freq);
 /* db: n bins from spectrum_compute. Updates floor, smoothing and peaks, draws off screen. */
 void view_render(const float *db, int n, uint32_t freq);

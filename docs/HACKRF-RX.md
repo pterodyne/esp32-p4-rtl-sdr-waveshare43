@@ -2,8 +2,10 @@
 
 This is a selectable **receive-only** backend for the existing Waveshare
 ESP32-P4-WIFI6-Touch-LCD-4.3 BSP. It is a host-tested, cross-built experimental
-port, **not yet a verified physical HackRF/P4 receiver**. No flashing, UART
-access, transmission, or RF measurements were performed to produce it.
+port. The owner reports working FM at **LNA 40 / VGA 62**; this is positive
+FM-only evidence, not validation of HF, other modes, or low-rate alias rejection.
+No flashing, UART access, transmission, or RF measurements were performed
+for this UI change.
 The user's HackRF is connected to the P4's 40-pin USB-host data connection,
 not passed through to the Linux build host. This backend uses that same
 ESP-IDF USB Host controller and existing shim; it does not use host Linux USB.
@@ -92,11 +94,27 @@ anti-aliased conversion to the DSP rates, after proving USB/DMA/CPU headroom.
 - Bias-T ON is an explicit RF INPUT action for a compatible **3.3 V** active
   antenna/LNA only. Failed commands leave the UI's power state unknown and OFF
   remains retryable. A USB acknowledgement is **not a voltage measurement**.
-- HackRF has **no tuner AGC**. Gain labels show actual requested paired settings
-  `L<n> V<n>` in dB: LNA 0/8/16/24/32/40 plus VGA 0/16/32/62 at LNA 40.
-  The legacy saved AGC (-1) maps to manual L40/V0; other saved totals map to the
-  nearest paired setting. The RF amp stays off. A partial/failed gain operation
-  reports `GAIN ?` rather than pretending both stages retain the previous value.
+- HackRF has **no tuner AGC**. Independent **LNA -/+** (0–40 dB, 8 dB steps)
+  and **VGA -/+** (0–62 dB, 2 dB steps) sit left of the frequency and battery
+  readout in landscape. VGA is the HackRF stage (not “VNA”). Portrait reserves
+  an additional 40-pixel row for frequency/battery, rather than overlapping the
+  widest four-digit MHz plus 100-Hz readout. MENU stays on the top bar.
+  The old top-bar GAIN preset toggle is absent **only on HackRF**; RTL's UI,
+  tuner gain table, AGC and driver remain unchanged. The existing Controls gain
+  page still offers paired shortcuts, which deliberately set both stages.
+- Each main-screen stage tap sends just request 19 (LNA) or 20 (VGA), preserving
+  the other stage. No hold-repeat: one deliberate adjustment on release, with
+  ordinary wake touches consumed through stable release. Values show acknowledged
+  commands, not measured analog gain. A failed command marks only that stage
+  `?`, retains its previous desired value, and remains retryable at a limit.
+  A failed paired shortcut conservatively marks both stages unknown.
+- Independent desired values survive reopen and are saved as a versioned atomic
+  `hrgain1` pair in NVS namespace `sdr`, using the existing three-second settings
+  debounce with write/commit retry. Immediate power removal before that save can
+  lose the latest adjustment. Missing/corrupt records default to L40/V0.
+  HackRF does **not read or overwrite RTL's legacy `gaint` key**; the previous
+  HackRF paired-total setting is not migrated because it cannot encode independent
+  stages. Diagnostic sessions suppress saving the temporary pair. RF amp stays OFF.
 - RTL direct-sampling I/Q choices are disabled. The existing RTL/Blog PLL/GPIO5
   diagnostic is not a HackRF diagnostic; it reports unknown/unavailable and
   cannot establish HackRF lock or RF input state.
@@ -113,7 +131,19 @@ anti-aliased conversion to the DSP rates, after proving USB/DMA/CPU headroom.
 signed-to-unsigned boundaries, rejection of TX mode, rate filtering, bias override
 version gating, async stop/drain/restart, partial submission, disconnect, odd IQ,
 HS endpoint descriptor parsing, actual SDR open/reopen/safety/rate/gain/ring paths
-with host USB/RTOS seams, and source contracts for honest HackRF UI labels.
+with host USB/RTOS seams, stage isolation at every legal setting, grouped NVS
+set/commit/range failures, and source contracts for the UI command/save routes.
+The real host renderer checks gain-key hit/paint, widest-frequency separation
+from keys/labels/battery, unknown states, pressed feedback, all five looks and
+four rotations, plus the existing wake-consumption policy. These do not replace
+physical touch or RF tests. Generate synthetic (not live RF) final-source PNGs:
+
+```sh
+sh tools/test_hackrf.sh
+mkdir -p dist/gain-previews
+"$TMPDIR/preview-hackrf" --test-hackrf-header dist/gain-previews
+```
+
 The existing controls, RTL RF-I/O and SD audio host suites are also regression
 checks. Host seams do not emulate the actual ESP-IDF host-controller scheduler.
 

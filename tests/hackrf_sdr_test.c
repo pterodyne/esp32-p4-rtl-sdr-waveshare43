@@ -2,6 +2,7 @@
 #include "../main/sdr_hackrf.c"
 static int fail_gain, fail_safe, wrong_id, closes, fail_bias, tunes, fail_rate;
 static uint32_t commanded_rate;
+static unsigned last_stage_db; static bool last_stage_lna; static int stage_calls;
 int64_t esp_timer_get_time(void) {static int64_t t;return t+=100000;}
 int rtlsdr_usb_start(void){return 0;}
 bool rtlsdr_usb_wait_new_device(uint32_t ms){(void)ms;return false;}
@@ -27,18 +28,45 @@ void hackrf_rx_unsigned(unsigned char*p,unsigned n){for(unsigned i=0;i<n;i++)p[i
 int hackrf_stream_run(libusb_device_handle*h,hackrf_sink_t s,void*c){(void)h;(void)s;(void)c;return 0;}
 void hackrf_stream_stop(void){}
 void hackrf_stream_prepare(void){}
+int hackrf_rx_stage(libusb_device_handle*h,bool l,unsigned db){(void)h;last_stage_lna=l;last_stage_db=db;stage_calls++;return fail_gain?-1:0;}
+int sdr_stage_gain(bool);
+bool sdr_stage_known(bool);
+bool sdr_set_stage_gain(bool,int);
 int main(void) {
  char desc[96];
  wrong_id=1;assert(!sdr_open(0,desc,sizeof desc));assert(!dev);
  wrong_id=0;fail_safe=1;assert(!sdr_open(0,desc,sizeof desc));assert(!dev && closes==1);
  fail_safe=0;fail_gain=1;assert(!sdr_open(0,desc,sizeof desc));assert(!dev);
  fail_gain=0;assert(sdr_open(0,desc,sizeof desc));
+ assert(sdr_set_stage_gain(true,24) && sdr_set_stage_gain(false,30));
+ assert(sdr_stage_gain(true)==24 && sdr_stage_gain(false)==30);
+ assert(!strcmp(sdr_gain_label(sdr_gain_index()),"L24 V30"));
+ fail_gain=1;assert(!sdr_set_stage_gain(true,32));
+ assert(sdr_stage_gain(true)==24 && !sdr_stage_known(true));
+ assert(sdr_stage_gain(false)==30 && sdr_stage_known(false));
+ assert(!strcmp(sdr_gain_label(sdr_gain_index()),"L? V30"));
+ fail_gain=0;assert(sdr_set_stage_gain(true,24) && sdr_stage_known(true));
+ assert(!sdr_set_stage_gain(true,7) && !sdr_set_stage_gain(false,64));
+ for(int l=0;l<=40;l+=8) {
+   int before=stage_calls; assert(sdr_set_stage_gain(true,l));
+   assert(stage_calls==before+1 && last_stage_lna && last_stage_db==(unsigned)l && sdr_stage_gain(false)==30);
+ }
+ for(int v=0;v<=62;v+=2) {
+   assert(sdr_set_stage_gain(false,v));
+   assert(!last_stage_lna && last_stage_db==(unsigned)v && sdr_stage_gain(true)==40);
+ }
+ assert(sdr_close() && sdr_open(0,desc,sizeof desc));
+ assert(sdr_stage_gain(true)==40 && sdr_stage_gain(false)==62);
  assert(commanded_rate==2400000 && !sdr_bias_tee() && sdr_bias_command_ok());
  assert(!sdr_direct_supported() && !sdr_set_direct_mode(1));
  assert(sdr_gain_tenths(0)==0 && strcmp(sdr_gain_label(0),"AGC"));
  sdr_set_gain_index(0);assert(sdr_gain_index()==0);
  fail_gain=1;sdr_set_gain_index(4);assert(sdr_gain_index()==0);
- assert(!strcmp(sdr_gain_label(0),"GAIN ?"));fail_gain=0;
+ assert(!strcmp(sdr_gain_label(0),"L? V?"));fail_gain=0;
+ assert(sdr_set_stage_gain(true,8));
+ assert(!strcmp(sdr_gain_label(0),"L8 V?"));
+ assert(sdr_set_stage_gain(false,2));
+ assert(!strcmp(sdr_gain_label(0),"L8 V2"));
  sdr_set_sample_rate(2000000);assert(commanded_rate==2000000 && sdr_sample_rate()==2000000);
  sdr_set_sample_rate(12345);assert(sdr_sample_rate()==2000000);
  fail_rate=1;sdr_set_sample_rate(2400000);assert(sdr_sample_rate()==2000000);

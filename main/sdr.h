@@ -24,6 +24,10 @@ uint32_t sdr_freq(void);
 /* Snapshot of USB identity and last HF/VHF command observations, not RF proof. */
 hf_diag_state_t sdr_hf_diag_snapshot(void);
 /* Gain steps: index 0 = tuner AGC, then every gain the tuner offers (29 on the R828D). */
+/* HackRF-only independent stages; true selects LNA, false VGA. */
+int sdr_stage_gain(bool lna);
+bool sdr_stage_known(bool lna);
+bool sdr_set_stage_gain(bool lna, int db);
 int sdr_gain_presets(void);
 int sdr_gain_index(void);
 void sdr_set_gain_index(int i);

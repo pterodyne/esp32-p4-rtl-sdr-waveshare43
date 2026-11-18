@@ -30,6 +30,7 @@
 #include "waveshare_geometry.h"
 #include "touch_mode_store.h"
 #include "quick_gain.h"
+#include "hackrf_gain_store.h"
 #endif
 #include "sdr.h"
 #include "rtlsdr_usb.h"
@@ -88,6 +89,9 @@ static int64_t s_hop_at, s_dwell_until;
 static int s_battery_drawn = -1;
 static void draw_header(int pressed) {
     s_battery_drawn = battery_voltage_get();
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    view_set_stage_gains(sdr_stage_gain(true),sdr_stage_gain(false),sdr_stage_known(true),sdr_stage_known(false));
+#endif
     view_header(sdr_freq(), sdr_gain_label(sdr_gain_index()), pressed);
     if (!s_panel) view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, pressed);
 }
@@ -136,7 +140,12 @@ static void settings_maybe_save(bool force)
     if (!settings_save_due(s_save_at, esp_timer_get_time(), force)) return;
     s_save_at = 0;
     nvs_set_u32(s_nvs, "freq", s_remote_active ? s_remote_saved_hz : sdr_freq());
+#ifndef CONFIG_SDR_BACKEND_HACKRF
     nvs_set_i32(s_nvs, "gaint", s_remote_active ? s_remote_saved_gain : sdr_gain_tenths(sdr_gain_index()));
+#else
+    if(!s_remote_active && hackrf_gain_save(s_nvs,sdr_stage_gain(true),sdr_stage_gain(false))!=ESP_OK)
+        settings_changed(); /* retain desired pair and retry failed write/commit */
+#endif
     nvs_set_i32(s_nvs, "theme", view_theme());
 #ifdef CONFIG_SDR_WAVESHARE_43
     nvs_set_i32(s_nvs, "tstep", s_tune_step);
@@ -415,6 +424,18 @@ static void turn(void)
 
 static void do_action(int act)
 {
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    if (act >= VIEW_LNA_DN && act <= VIEW_VGA_UP) {
+        bool lna=act<=VIEW_LNA_UP;
+        int step=lna?8:2, max=lna?40:62;
+        int db=sdr_stage_gain(lna)+(act==VIEW_LNA_UP || act==VIEW_VGA_UP ? step : -step);
+        if(db<0) db=0;
+        if(db>max) db=max;
+        if(sdr_set_stage_gain(lna,db)) settings_changed();
+        draw_header(act);
+        return;
+    }
+#endif
     if (act == VIEW_MUTE) {
         s_muted = !s_muted;
         audio_set_mute(s_muted); /* don't replace persisted volume or stop IQ/RDS processing */

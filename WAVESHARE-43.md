@@ -7,8 +7,11 @@ An experimental, selectable [HackRF One RX backend](docs/HACKRF-RX.md) is
 available with `SDR_BACKEND=hackrf tools/build_waveshare43.sh`. The normal/default
 build and RTL behavior described below are retained. HackRF uses manual LNA/VGA,
 no direct ADC, optional 3.3 V Bias-T, amp OFF and explicit experimental native
-2.4/2 MS/s rates. Physical HackRF reception is not verified; no unspecified
-7-inch board is supported by these 4.3-inch images.
+2.4/2 MS/s rates. The owner reports working FM at LNA 40 / VGA 62; other RF
+behavior is not established by that FM-only evidence. Independent LNA and VGA
+-/+ controls occupy the readout row in landscape, with a separate readout row
+in portrait; the header GAIN preset key is removed only on HackRF. RTL settings
+remain separate. No unspecified 7-inch board is supported by these 4.3-inch images.
 
 This branch targets the **Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3**. It uses the
 board's 480×800 ST7701 MIPI-DSI panel and GT911 capacitive touch (no

@@ -1,6 +1,8 @@
 /* RX-only HackRF One protocol; see docs/HACKRF-RX.md for source attribution. */
 #pragma once
 #include "libusb.h"
+#include <stdbool.h>
+int hackrf_rx_stage(libusb_device_handle *h, bool lna, unsigned db);
 void hackrf_rx_unsigned(unsigned char *data, unsigned n);
 int hackrf_rx_rate(libusb_device_handle *h, uint32_t hz);
 int hackrf_rx_tune(libusb_device_handle *h, uint32_t hz);

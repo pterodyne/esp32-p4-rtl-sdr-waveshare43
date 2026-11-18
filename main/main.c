@@ -20,6 +20,7 @@
 #include "waveshare_geometry.h"
 #endif
 #include "sdr.h"
+#include "hackrf_gain_store.h"
 #include "ui.h"
 #include "view.h"
 
@@ -103,7 +104,13 @@ static void load_settings(void)
     }
 #endif
     if (nvs_get_u32(h, "freq", &f) == ESP_OK) sdr_set_freq(f);
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    int l=40,v=0;
+    if(hackrf_gain_load(h,&l,&v)) { sdr_set_stage_gain(true,l); sdr_set_stage_gain(false,v); }
+    (void)g;
+#else
     if (nvs_get_i32(h, "gaint", &g) == ESP_OK) sdr_set_gain_tenths(g);   /* applied on open */
+#endif
     if (nvs_get_i32(h, "theme", &p) == ESP_OK) s_theme = p;
     nvs_close(h);
 }

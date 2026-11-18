@@ -15,8 +15,11 @@ GitHub account action that removes pull-request and other repository metadata.
 A selectable **HackRF One RX-only** backend now targets the same 4.3-inch board.
 Build with `SDR_BACKEND=hackrf tools/build_waveshare43.sh`; normal builds remain
 RTL. Read [HackRF setup, low-rate limitations and verification status](docs/HACKRF-RX.md)
-before testing. These images have host tests and rev1/rev3 cross-builds, **not
-physical HackRF/P4 RF verification**. The RTL-specific AGC/direct-ADC/Bias-T
+before testing. The owner reports FM working at LNA 40 / VGA 62 (FM-only
+evidence); this UI revision has host tests and rev1/rev3 cross-builds, not new
+physical-board verification. Independent LNA -/+ and VGA -/+ now sit beside the
+readout; the old header GAIN preset toggle is removed only for HackRF. Portrait
+reserves an additional readout row to avoid overlap. The RTL-specific AGC/direct-ADC/Bias-T
 statements below apply to RTL builds; HackRF uses manual LNA/VGA, no direct ADC,
 3.3 V optional antenna power and an always-disabled RF amp. No 7-inch BSP is
 assumed or included.

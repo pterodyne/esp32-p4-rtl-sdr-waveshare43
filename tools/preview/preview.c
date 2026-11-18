@@ -1211,8 +1211,68 @@ static void test_sd_audio_panel(void) {
 #endif
 }
 
+static void test_hackrf_header(const char *dir) {
+    (void)dir;
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    view_init(RATE);
+    for(int rot=0;rot<4;rot++) {
+        rpi_lcd_rotation=rot; rpi_lcd_set_portrait(!(rot&1));
+        for(int t=0;t<view_themes();t++) {
+            view_set_theme(t); view_set_fine_tune(true);
+            view_set_stage_gains(40,62,true,true);
+            view_header(100000100,"L40 V62",-1);
+            int ids[]={VIEW_LNA_DN,VIEW_LNA_UP,VIEW_VGA_DN,VIEW_VGA_UP};
+            int count[4]={0};
+            uint16_t before[800*160];
+            memcpy(before,fb,LCD_W*view_tune_y()*sizeof fb[0]);
+            view_header(1765999900,"L40 V62",-1);
+            for(int y=0;y<view_tune_y();y++) for(int x=0;x<LCD_W;x++) {
+                int id=view_button_at(x,y); assert(id!=VIEW_AGC_CYCLE);
+                if (id>=0 || (x<288 && y>=(t==1?54:40) && y<(t==1?94:80)) || x>=LCD_W-150)
+                                    assert(FB(x,y)==before[y*LCD_W+x]);
+                for(int k=0;k<4;k++) if(id==ids[k]) {
+                    count[k]++; int px,py,sx,sy;
+                    waveshare_screen_to_panel(rot,x,y,&px,&py);
+                    waveshare_panel_to_screen(rot,px,py,&sx,&sy);
+                    assert(view_button_at(sx,sy)==id);
+                }
+            }
+            for(int k=0;k<4;k++) {
+                assert(count[k]>500 && !view_header_repeats(ids[k]));
+                uint32_t a=crc32(0,(Bytef*)fb,LCD_W*view_tune_y()*sizeof fb[0]);
+                view_header(1765999900,"L40 V62",ids[k]);
+                assert(a!=crc32(0,(Bytef*)fb,LCD_W*view_tune_y()*sizeof fb[0]));
+                view_header(1765999900,"L40 V62",-1);
+                screen_idle_t idle={.asleep=true};
+                assert(screen_idle_update(&idle,60,1,true)&SCREEN_CONSUME);
+                assert(screen_idle_update(&idle,60,2,false)&SCREEN_CONSUME);
+                assert(screen_idle_update(&idle,60,50002,true)&SCREEN_CONSUME);
+                assert(screen_idle_update(&idle,60,60000,false)&SCREEN_CONSUME);
+                assert(screen_idle_update(&idle,60,160000,false)&SCREEN_CONSUME);
+                assert(!(screen_idle_update(&idle,60,160001,true)&SCREEN_CONSUME));
+            }
+            if(dir) {
+                static float db[1024];
+                view_axis(1765999900);
+                for(int i=0;i<1024;i++) db[i]=-95+3*sinf(i*0.7f);
+                for(int f=0;f<12;f++) view_render(db,1024,1765999900);
+                view_blit(); view_audio_controls(5,2,0,0,-1);
+                char path[512]; snprintf(path,sizeof path,"%s/hackrf-%s-rot%d.png",dir,view_theme_name(t),rot);
+                write_png(path,fb,LCD_W,LCD_H);
+            }
+            memcpy(before,fb,LCD_W*view_tune_y()*sizeof fb[0]);
+            view_set_stage_gains(40,62,false,true);
+            view_header(1765999900,"L40 V62",-1);
+            assert(memcmp(before,fb,LCD_W*view_tune_y()*sizeof fb[0]));
+        }
+    }
+#endif
+    puts("HackRF independent stage paint/hit/rotation/wake contracts PASS");
+}
+
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--test-hackrf-header")) { test_hackrf_header(argc>2?argv[2]:NULL); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-sd-audio")) { test_sd_audio_panel(); return 0; }
     if (argc > 5 && !strcmp(argv[1], "--sd-snapshot")) {
         int look=atoi(argv[3]),rot=atoi(argv[4]);

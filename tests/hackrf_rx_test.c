@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "hackrf_rx.h"
+#include <stdbool.h>
+int hackrf_rx_stage(libusb_device_handle *, bool, unsigned);
 static int calls, fail;
 static unsigned reqs[32], vals[32], idxs[32], lens[32], dirs[32];
 static unsigned char payload[32][8];
@@ -43,5 +45,13 @@ int main(void) {
  assert(hackrf_rx_clear_bias_options(NULL,0x0108)==0);
  assert(reqs[calls-1]==48 && vals[calls-1]==0x24);
  fail=1; assert(hackrf_rx_rate(NULL,2400000)<0);
+ fail=0; before=calls;
+ assert(hackrf_rx_stage(NULL, true, 16)==0);
+ assert(calls==before+1 && reqs[before]==19 && idxs[before]==16);
+ before=calls; assert(hackrf_rx_stage(NULL,false,62)==0);
+ assert(calls==before+1 && reqs[before]==20 && idxs[before]==62);
+ before=calls; assert(hackrf_rx_stage(NULL,true,7)<0 && calls==before);
+ assert(hackrf_rx_stage(NULL,false,63)<0 && calls==before);
+ fail=1; assert(hackrf_rx_stage(NULL,true,8)<0);
  puts("HackRF protocol/format tests PASS");
 }
