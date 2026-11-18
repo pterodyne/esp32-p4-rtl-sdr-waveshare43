@@ -683,7 +683,11 @@ void view_header(uint32_t freq, const char *gain, int pressed)
     if (T->hdr == HDR_PORTAPACK) {           /* title bar */
         rpi_cv_fill(&c, 0, 0, LCD_W, 16, RGB565(48, 48, 64));
         rpi_cv_text(&c, 4, 0, "<", T->txt, 1);
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+        rpi_cv_text(&c, 20, 0, "Spectrum  HackRF RX", T->txt, 1);
+#else
         rpi_cv_text(&c, 20, 0, "Spectrum  RTL-SDR V4", T->txt, 1);
+#endif
         const char *r = "2.4 MS/s";
         rpi_cv_text(&c, LCD_W - 4 - rpi_cv_text_w(r, 1), 0, r, T->dim, 1);
     }

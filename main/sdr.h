@@ -6,7 +6,10 @@
 
 #define SDR_SAMPLE_RATE 2400000
 
-/* Wait up to timeout_ms for an RTL-SDR on the USB-A ports, open it, set the sample rate. */
+/* Selected USB receiver backend; unsigned interleaved 8-bit I/Q at application rate.
+ * RTL-specific AGC/direct-sampling semantics below do not apply to HackRF builds;
+ * see docs/HACKRF-RX.md. HackRF exposes manual paired LNA/VGA gains, including index 0. */
+/* Wait up to timeout_ms for the selected receiver on the P4 USB host. */
 bool sdr_open(uint32_t timeout_ms, char *desc, size_t desc_len);
 bool sdr_close(void);                        /* false if RX task still owns the USB device */
 /* Counter-mode USB check (no streaming running): lost bytes and measured bytes/s. */

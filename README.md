@@ -10,6 +10,17 @@ attribution and GPL-3.0 license remain. GitHub currently still labels this
 repository a fork; leaving the fork network is a separate, irreversible
 GitHub account action that removes pull-request and other repository metadata.
 
+## Experimental HackRF One RX build
+
+A selectable **HackRF One RX-only** backend now targets the same 4.3-inch board.
+Build with `SDR_BACKEND=hackrf tools/build_waveshare43.sh`; normal builds remain
+RTL. Read [HackRF setup, low-rate limitations and verification status](docs/HACKRF-RX.md)
+before testing. These images have host tests and rev1/rev3 cross-builds, **not
+physical HackRF/P4 RF verification**. The RTL-specific AGC/direct-ADC/Bias-T
+statements below apply to RTL builds; HackRF uses manual LNA/VGA, no direct ADC,
+3.3 V optional antenna power and an always-disabled RF amp. No 7-inch BSP is
+assumed or included.
+
 ## Waveshare UI previews
 
 ![Host-rendered Waveshare Freeform receiver preview](docs/images/waveshare-main-freeform.png)

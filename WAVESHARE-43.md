@@ -3,6 +3,13 @@
 Fork of [John O'Dell's P4 SDR](https://github.com/John-ODell/esp32-p4-rtl-sdr)
 (GPL-3.0; original license and attribution retained).
 
+An experimental, selectable [HackRF One RX backend](docs/HACKRF-RX.md) is
+available with `SDR_BACKEND=hackrf tools/build_waveshare43.sh`. The normal/default
+build and RTL behavior described below are retained. HackRF uses manual LNA/VGA,
+no direct ADC, optional 3.3 V Bias-T, amp OFF and explicit experimental native
+2.4/2 MS/s rates. Physical HackRF reception is not verified; no unspecified
+7-inch board is supported by these 4.3-inch images.
+
 This branch targets the **Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3**. It uses the
 board's 480×800 ST7701 MIPI-DSI panel and GT911 capacitive touch (no
 calibration), and retains the original RTL-SDR, SD card,

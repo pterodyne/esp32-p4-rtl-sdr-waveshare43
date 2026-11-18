@@ -1,5 +1,10 @@
 # Third-party material
 
+- `main/hackrf_rx.c`: RX-only implementation of the published HackRF protocol,
+  referenced to Great Scott Gadgets `hackrf` v2024.02.1 `host/libhackrf/src/hackrf.c`
+  (GPL-2.0-or-later; original protocol implementation copyright its contributors).
+  No complete libhackrf/TX implementation is vendored. See [HackRF notes](docs/HACKRF-RX.md).
+
 - `components/rtlsdr/blog/`: librtlsdr from the RTL-SDR Blog fork (rtlsdrblog/rtl-sdr-blog,
   commit aed0ea1), copied unmodified. GPL-2.0-or-later; see `blog/COPYING` and the file headers.
   The libusb shim in `components/rtlsdr/shim/` was written for this project.

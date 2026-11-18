@@ -105,6 +105,7 @@ int  libusb_get_string_descriptor_ascii(libusb_device_handle *h, uint8_t idx, un
 int  libusb_kernel_driver_active(libusb_device_handle *h, int iface);
 int  libusb_detach_kernel_driver(libusb_device_handle *h, int iface);
 int  libusb_attach_kernel_driver(libusb_device_handle *h, int iface);
+int libusb_validate_bulk_in(libusb_device_handle *h, unsigned char endpoint);
 int  libusb_claim_interface(libusb_device_handle *h, int iface);
 int  libusb_release_interface(libusb_device_handle *h, int iface);
 int  libusb_reset_device(libusb_device_handle *h);

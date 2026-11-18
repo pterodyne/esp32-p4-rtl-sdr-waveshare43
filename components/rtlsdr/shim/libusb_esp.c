@@ -20,6 +20,9 @@
 #include "usb/usb_host.h"
 #include "libusb.h"
 #include "rtlsdr_usb.h"
+#include "usb_rx_descriptor.h"
+
+
 
 static const char *TAG = "libusb";
 
@@ -230,6 +233,15 @@ void libusb_close(libusb_device_handle *h)
     for (int i = 0; i < 4; i++) if (s_open[i] == h) s_open[i] = NULL;
     usb_host_device_close(s_client, h->hdl);
     free(h);
+}
+
+int libusb_validate_bulk_in(libusb_device_handle *h, unsigned char endpoint)
+{
+    const usb_config_desc_t *cfg;
+    usb_device_info_t info;
+    if (usb_host_device_info(h->hdl, &info) != ESP_OK || info.speed != USB_SPEED_HIGH ||
+        usb_host_get_active_config_descriptor(h->hdl, &cfg) != ESP_OK) return LIBUSB_ERROR_NOT_SUPPORTED;
+    return usb_rx_descriptor_valid((const uint8_t *)cfg, cfg->wTotalLength, endpoint) ? 0 : LIBUSB_ERROR_NOT_SUPPORTED;
 }
 
 libusb_device *libusb_get_device(libusb_device_handle *h) { return &h->dev; }
