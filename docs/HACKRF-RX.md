@@ -103,7 +103,7 @@ anti-aliased conversion to the DSP rates, after proving USB/DMA/CPU headroom.
   tuner gain table, AGC and driver remain unchanged. The existing Controls gain
   page still offers paired shortcuts, which deliberately set both stages.
 - Each main-screen stage tap sends just request 19 (LNA) or 20 (VGA), preserving
-  the other stage. No hold-repeat: one deliberate adjustment on release, with
+  the other stage. No hold-repeat: one deliberate adjustment per press, with
   ordinary wake touches consumed through stable release. Values show acknowledged
   commands, not measured analog gain. A failed command marks only that stage
   `?`, retains its previous desired value, and remains retryable at a limit.
