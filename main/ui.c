@@ -923,6 +923,18 @@ static void log_aircraft(void)
 
 /* 1090 MHz at 2 MS/s, max gain, every sample through the decoder. Returns when EXIT is
  * tapped or the stream dies; the receiver settings are restored either way. */
+/* Remains set across failed rollback, stream restart and device reopen. */
+static bool s_normal_restore_pending;
+
+static bool normal_rate_restore(void)
+{
+    if (!sdr_request_sample_rate(SDR_SAMPLE_RATE)) return false;
+    s_normal_restore_pending = false;
+    sdr_start();
+    audio_pause(false);
+    return true;
+}
+
 static void adsb_mode(const touch_cal_t *cal)
 {
     enum { BUF = 32 * 1024 };
@@ -1027,6 +1039,7 @@ adsb_restore:
     sdr_stop();
     sdlog_end();
     bool rate_restored = sdr_request_sample_rate(SDR_SAMPLE_RATE);
+    s_normal_restore_pending = !rate_restored;
     sdr_set_freq(freq);
     sdr_set_gain_index(gain);
 #ifdef CONFIG_SDR_BACKEND_HACKRF
@@ -1413,10 +1426,12 @@ void ui_run(const touch_cal_t *cal)
         remote_diag_poll();
         if (!sdr_streaming()) peak_wait_fresh_iq(); /* before touch during recovery */
         poll_touch(cal); /* timeout/wake also work during stream loss */
+        if (s_normal_restore_pending) goto normal_recovery;
         if (s_adsb_req) {
             s_adsb_req = false;
             adsb_mode(cal);
             peak_wait_fresh_iq();
+            if (s_normal_restore_pending) goto normal_recovery;
         }
         if (s_scan_req >= 0) {
             int k = s_scan_req;
@@ -1429,7 +1444,9 @@ void ui_run(const touch_cal_t *cal)
             sensor_mode(cal);
             peak_wait_fresh_iq();
         }
+normal_recovery:
         if (!s_panel && battery_voltage_get() != s_battery_drawn) draw_header(-1);
+        if (s_normal_restore_pending) sdr_stop();
         if (!sdr_streaming()) {
             static int restarts;
             if (!rtlsdr_usb_take_gone() && restarts < 3) {
@@ -1437,7 +1454,8 @@ void ui_run(const touch_cal_t *cal)
                 restarts++;
                 ESP_LOGW(TAG, "stream stopped, restart %d", restarts);
                 vTaskDelay(pdMS_TO_TICKS(500));
-                sdr_start();
+                if (s_normal_restore_pending) normal_rate_restore();
+                else sdr_start();
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
@@ -1458,9 +1476,14 @@ void ui_run(const touch_cal_t *cal)
             view_reset();
             draw_header(-1);
             view_axis(sdr_freq());
-            sdr_start();
+            if (s_normal_restore_pending) normal_rate_restore();
+            else sdr_start();
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
+        }
+        if (s_normal_restore_pending) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue; /* stop may still be draining: never process ADS-B-rate IQ */
         }
         int64_t t0 = esp_timer_get_time();
         int n = spectrum_size();

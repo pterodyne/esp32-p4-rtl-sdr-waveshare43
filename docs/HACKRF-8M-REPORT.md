@@ -113,6 +113,42 @@ The full-image offset is 0x0; use only the confirmed matching silicon revision.
 Full-image flashing can reset NVS/settings. This report is not authorization to
 flash and does not label host cross-builds as hardware verification.
 
+## Independent review fix: normal-rate recovery and RTL checked requests
+
+The ADS-B exit now retains an explicit pending normal-rate restoration state.
+Both attached-device restart and close/open recovery must successfully check
+2.4 MS/s before starting RX and resuming the paused audio reader. Pending state
+bypasses foreground decoder requests (including requests queued on the exit
+iteration) and blocks normal FFT/render/audio processing even if stop is still
+draining. The existing mute, volume, squelch, saved frequency and stage gains
+are not replaced by recovery defaults.
+
+RTL's existing void setter/checked-request API now commits its rate only after
+a successful hardware command. Failed changes attempt a checked rollback;
+failed rollback reports rate zero and refuses RX start. Open checks its rate
+command, closes on failure and retries instead of claiming an initialized
+receiver. The last requested/confirmed reopen rate remains separate from the
+known-clock flag; close invalidates clock knowledge. Active RX owners reject
+rate changes.
+
+Strict red/green evidence: the new executable UI seam first aborted at the
+missing pending-state assertion; the actual RTL setter/getter seam first
+aborted because a failed 2 MHz command falsely reported 2 MHz. Both then pass.
+The UI test compiles the actual ADS-B restoration statements, recovery branches
+and restoration helper from `ui.c`, injecting stopped/reopen/rate failures at
+the hardware boundary. It exercises failed normal restoration with successful
+2 MHz rollback and unknown clock followed by reopen, requires zero normal
+frames/starts/resumes at the wrong rate, and checks audio resumes after checked
+recovery. This is host control-flow evidence, not interactive UI or hardware
+audio execution. Existing actual HackRF backend fault-injection tests remain.
+
+After the fix, all four suites (`test_hackrf.sh`, `test_controls.sh`,
+`test_rf.sh`, `test_sd_audio.sh`) pass. HackRF and RTL rev1/rev3 builds and merged
+images were regenerated using ESP-IDF v5.5.5 / RISC-V GCC 14.2.0. Final source,
+logs, configurations, constituent offsets/hashes and merged-image byte
+comparisons are recorded locally in `dist/hackrf-review-fix-evidence/`.
+No upstream access, push, merge, flash, UART or TX was performed.
+
 ## Remaining required hardware work
 
 Measure the boot kernel self-test, sustained native accepted USB throughput,
