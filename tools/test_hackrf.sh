@@ -16,3 +16,6 @@ python tests/hackrf_ui_test.py
 D=components/rpi_display
 cc -O2 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-field-initializers -DCONFIG_SDR_WAVESHARE_43 -DCONFIG_SDR_BACKEND_HACKRF -Itools/preview/stub -I"$D/include" -I"$D" -Imain tools/preview/preview.c main/view.c main/panel.c main/hf_diag.c main/adsb.c main/adsb_view.c main/amap.c main/scan_view.c main/sensor_view.c main/spectrum.c "$D/rpi_canvas.c" "$D/rpi_text.c" -lz -lm -o "$TMPDIR/preview-hackrf"
 "$TMPDIR/preview-hackrf" --test-hackrf-header
+python3 tests/hackrf_gain_immediate_test.py
+python3 tests/narrow_zoom_test.py
+python3 tests/spectrum_columns_test.py

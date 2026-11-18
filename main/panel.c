@@ -18,9 +18,10 @@
 
 /* ------------------------------------------------------------------------- tables -- */
 
-static const uint32_t s_zoom_hz[PANEL_ZOOMS] = {2400000, 1200000, 600000, 300000};
-static const char *s_zoom_lbl[PANEL_ZOOMS] = {"2.4 MHz", "1.2 MHz", "600 kHz", "300 kHz"};
-static const char *s_zoom_sub[PANEL_ZOOMS] = {"whole span", "2x", "4x", "8x"};
+/* Persisted IDs: append only; zoom changes display span, never capture rate. */
+static const uint32_t s_zoom_hz[PANEL_ZOOMS] = {2400000, 1200000, 600000, 300000, 200000, 100000};
+static const char *s_zoom_lbl[PANEL_ZOOMS] = {"2.4 MHz", "1.2 MHz", "600 kHz", "300 kHz", "200 kHz", "100 kHz"};
+static const char *s_zoom_sub[PANEL_ZOOMS] = {"whole span", "2x", "4x", "8x", "12x", "24x"};
 /* Keep indexes 0..3 stable: they are persisted in NVS and channel-memory blobs. */
 static const uint32_t s_bw_hz[PANEL_BWS] = {200000, 25000, 12500, 8000, 3000, 3000};
 static const char *s_bw_sub[PANEL_BWS] = {"200k FM radio", "25k wide", "12.5k narrow", "8k airband",

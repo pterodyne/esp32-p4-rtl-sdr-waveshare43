@@ -6,6 +6,9 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <errno.h>
+#include <stdarg.h>
+#include <fcntl.h>
 #include "sd_audio.h"
 #include "wav_audio.h"
 #include "freertos/queue.h"
@@ -24,6 +27,13 @@ int xTaskCreatePinnedToCore(void (*fn)(void *),const char *name,unsigned stack,v
 static _Atomic int cancel_mount, cancel_open;
 static _Atomic bool cancel_page_exit;
 static _Atomic bool near_limit;
+static _Atomic bool fail_create;
+int __real_open(const char *,int,...);
+int __wrap_open(const char *path,int flags,...) {
+    va_list args;va_start(args,flags);int permissions=va_arg(args,int);va_end(args);
+    if(atomic_exchange(&fail_create,false)) {errno=EINVAL;return -1;}
+    return __real_open(path,flags,permissions);
+}
 static _Atomic bool fail_read,fail_write,fail_flush,fail_close,arm_read;
 size_t __real_fread(void *,size_t,size_t,FILE *);
 size_t __real_fwrite(const void *,size_t,size_t,FILE *);
@@ -185,7 +195,19 @@ int main(void) {
     for(int i=0;i<5000 && snap().batch!=0;i++)usleep(1000);
     assert(snap().batch==0);
     card=false;assert(sd_audio_request(SD_AUDIO_REFRESH,0));until(SD_AUDIO_IDLE,"No SD");assert(refs==0);assert(snap().count==0);
+    /* A failed REC must expose a persistent actionable diagnostic, not silently
+     * return to an idle red-circle button. Exercise real worker mount failure. */
+    assert(sd_audio_request(SD_AUDIO_RECORD,0));
+    until(SD_AUDIO_IDLE,"No SD");usleep(100000);
+    assert(strstr(snap().status,"REC mount failed") && !snap().record_requested);
+    assert(snap().record_error);
+    sd_audio_playback_page(true);sd_audio_playback_page(false);
+    assert(strstr(snap().status,"REC mount failed")); /* opening INFO must not erase the evidence */
     card=true;
+    fail_create=true;assert(sd_audio_request(SD_AUDIO_RECORD,0));
+    until(SD_AUDIO_IDLE,"REC create WAV errno=");
+    assert(snap().record_error && !snap().record_requested);
+    assert(strstr(snap().status,"Invalid argument"));
     FILE *del=fopen("host-card/AUDIO/RX999999.WAV","wb");assert(del);
     wav_writer_t dw;assert(wav_begin(&dw,del));
     for(int i=0;i<10;i++) assert(wav_append(&dw,pcm,480));

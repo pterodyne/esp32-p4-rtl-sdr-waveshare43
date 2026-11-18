@@ -1351,7 +1351,8 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "--test-quick-header")) { test_quick_header(); return 0; }
     if (argc > 1 && !strcmp(argv[1], "--test-range-reset-waterfall")) { test_range_reset_waterfall(); return 0; }
     if (argc > 2 && !strcmp(argv[1], "--audio-snapshot")) {
-        static float db[1024];
+        static float db[4096];
+        int zoom = 0;
         bool portrait = false, phosphor = false;
         int touch_mode = VIEW_TOUCH_FREE;
         for (int i = 3; i < argc; i++) {
@@ -1359,12 +1360,16 @@ int main(int argc, char **argv)
             else if (!strcmp(argv[i], "--phosphor")) phosphor = true;
             else if (!strcmp(argv[i], "--snap")) touch_mode = VIEW_TOUCH_SNAP;
             else if (!strcmp(argv[i], "--peak")) touch_mode = VIEW_TOUCH_PEAK;
+            else if (!strcmp(argv[i], "--200k")) zoom = 4;
+            else if (!strcmp(argv[i], "--100k")) zoom = 5;
             else { fprintf(stderr, "unknown snapshot option: %s\n", argv[i]); return 2; }
         }
         view_init(RATE);
         if (portrait) rpi_lcd_set_portrait(true);
         view_set_theme(phosphor ? 2 : 0);
         view_set_touch_mode(touch_mode);
+        view_set_span(panel_zoom_hz(zoom));
+        view_set_zoom_cycle(zoom);
         view_set_passband(3000);
         view_set_sideband(1);
         view_set_fine_tune(true);
@@ -1372,13 +1377,13 @@ int main(int argc, char **argv)
         view_header(142000100, "AGC", -1);
         view_axis(142000100);
         for (int frame = 0; frame < 80; frame++) {
-            for (int i = 0; i < 1024; i++)
+            for (int i = 0; i < 4096; i++)
                 db[i] = -89 + 3 * sin(i * 0.7 + frame * 0.4) +
-                        (i > 510 && i < 514 ? 30 : 0);
-            view_render(db, 1024, 142000100);
+                        (i > 2050 && i < 2054 ? 30 : 0);
+            view_render(db, 4096, 142000100);
         }
         view_blit();
-        view_audio_controls(5, 2, 4, 0, -1);
+        view_audio_controls(5, 2, 4, zoom, -1);
         write_png(argv[2], fb, LCD_W, LCD_H);
         printf("%s\n", argv[2]);
         return 0;

@@ -19,7 +19,7 @@
 #include "hf_diag.h"
 #include "sd_audio.h"
 
-#define PANEL_ZOOMS 4
+#define PANEL_ZOOMS 6
 #define PANEL_BWS   6
 #define PANEL_BANDS 30
 #define PANEL_MEMS  8
