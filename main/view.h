@@ -59,6 +59,7 @@ void view_set_audio(const char *label, bool live);
 void view_audio_controls(int vol, int sql, int bw, int zoom, int pressed);
 void view_set_mute(bool muted);              /* preserved volume, fixed-footer mute indication */
 void view_set_recording(bool active);
+void view_set_record_error(bool failed);
 void view_footer_invalidate(void);             /* after a full-screen menu obscures the footer */
 int view_audio_button_at(int x, int y);       /* mute and the four +/- keys; -1 elsewhere */
 int view_mode_button_at(int x, int y);        /* VIEW_MODE_0 + filter index, or -1 */

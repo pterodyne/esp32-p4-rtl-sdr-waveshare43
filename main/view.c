@@ -180,7 +180,9 @@ static uint16_t *s_hdr, *s_axis, *s_spec;
 static uint16_t *s_audio_ctrl;
 static bool s_footer_valid, s_muted;
 static bool s_recording;
+static bool s_record_error;
 void view_set_recording(bool active) { s_recording=active; }
+void view_set_record_error(bool failed) { s_record_error=failed; }
 static int s_footer_vol, s_footer_sql, s_footer_bw, s_footer_zoom, s_footer_pressed;
 static uint16_t *s_wf;                       /* 2*wf_h rows, each line stored twice */
 static int s_wf_head;
@@ -728,7 +730,7 @@ void view_header(uint32_t freq, const char *gain, int pressed)
                 int x=i==VIEW_RECORD ? cx-half : cx-5;
                 rpi_cv_fill(&c,x,cy+dy,2*half+1,1,ink);
             }
-            const char *label=i==VIEW_PLAY ? "PLAY" : s_recording ? "STOP" : "REC";
+            const char *label=i==VIEW_PLAY ? (s_record_error ? "INFO" : "PLAY") : s_recording ? "STOP" : s_record_error ? "ERR" : "REC";
             rpi_cv_text(&c,b->x+(b->w-rpi_cv_text_w(label,1))/2,b->y+b->h-16,label,btn_text(on),1);
         } else if (i == VIEW_TOUCH_MODE) {
             static const char *names[] = {"FREEFORM", "SNAP", "PEAK"};

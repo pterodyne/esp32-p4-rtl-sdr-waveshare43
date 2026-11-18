@@ -493,10 +493,12 @@ static void do_action(int act)
                 /* Freeze all metadata on REC, before any worker/mount delay. */
                 if(wav_record_name(name,sizeof name,sdr_freq(),s_ctl.bw,(int64_t)time(NULL),0))
                     sd_audio_request(SD_AUDIO_RECORD,name);
+                else sd_audio_record_error("REC rejected: cannot format frequency/mode/time filename");
             }
-        }
+        } else sd_audio_record_error("REC unavailable: audio codec init failed");
         sd_audio_snapshot(&s_ctl.sd_audio);
         view_set_recording(s_ctl.sd_audio.record_requested);
+        view_set_record_error(s_ctl.sd_audio.record_error);
         draw_header(act);
         return;
     }
@@ -509,7 +511,8 @@ static void do_action(int act)
             sd_audio_snapshot(&s_ctl.sd_audio);
             view_set_recording(s_ctl.sd_audio.record_requested);
             panel_open_recordings(&s_ctl);
-            sd_audio_request(SD_AUDIO_REFRESH, NULL);
+            /* INFO retains the failed REC diagnostic; explicit REFRESH lists files. */
+            if(!s_ctl.sd_audio.record_error) sd_audio_request(SD_AUDIO_REFRESH, NULL);
         }
         draw_header(act);
         return;
@@ -715,6 +718,7 @@ static void poll_touch(const touch_cal_t *cal)
                 strcmp(s_ctl.audio_selected_name,snapshot.files[s_ctl.audio_file]))) s_ctl.audio_file=-1;
             s_ctl.sd_audio = snapshot;
             view_set_recording(snapshot.record_requested);
+            view_set_record_error(snapshot.record_error);
             draw_header(-1);
             if (s_ctl.audio_file >= snapshot.count) s_ctl.audio_file = -1;
             if (s_panel && panel_recordings_visible()) {

@@ -45,6 +45,18 @@ static void setmode(int m) {
     mode=m; state.state=m; if(m==SD_AUDIO_IDLE) state.record_requested=false; state.generation++;
     taskEXIT_CRITICAL(&mux);
 }
+void sd_audio_record_error(const char *text) {
+    taskENTER_CRITICAL(&mux);
+    state.record_error=true;
+    snprintf(state.status,sizeof state.status,"%s",text);state.generation++;
+    taskEXIT_CRITICAL(&mux);
+}
+static void file_error(const char *operation) {
+    int saved=errno;
+    char text[80];
+    snprintf(text,sizeof text,"REC %s errno=%d: %.40s",operation,saved,strerror(saved));
+    sd_audio_record_error(text);
+}
 void sd_audio_snapshot(sd_audio_snapshot_t *out) {
     taskENTER_CRITICAL(&mux); *out=state; taskEXIT_CRITICAL(&mux);
 }
@@ -161,12 +173,17 @@ static void worker(void *arg) {
             else if(req.command==SD_AUDIO_REFRESH || req.command==SD_AUDIO_NEXT || req.command==SD_AUDIO_PREV) list(req.command);
             else if(req.command==SD_AUDIO_RECORD || req.command==SD_AUDIO_PLAY) {
                 ending=bad=limit=false;
-                if(!sdcard_mount()) {setmode(SD_AUDIO_IDLE);status("No SD card / mount failed");continue;}
+                if(!sdcard_mount()) {
+                    setmode(SD_AUDIO_IDLE);
+                    if(req.command==SD_AUDIO_RECORD) sd_audio_record_error("REC mount failed: No SD / check card, FAT format and seating");
+                    else status("No SD card / mount failed");
+                    continue;
+                }
                 mounted=true;
                 taskENTER_CRITICAL(&mux);head=tail=0;overflow=false;taskEXIT_CRITICAL(&mux);
                 char path[sizeof DIR_AUDIO+SD_AUDIO_NAME+4], name[SD_AUDIO_NAME]={0};
                 if(req.command==SD_AUDIO_RECORD) {
-                    if(mkdir(DIR_AUDIO,0777)!=0 && errno!=EEXIST) {status("Cannot create /AUDIO");goto failed;}
+                    if(mkdir(DIR_AUDIO,0777)!=0 && errno!=EEXIST) {file_error("mkdir /AUDIO");goto failed;}
                     /* O_EXCL never overwrites an existing recording, even after reboot. */
                     int fd=-1;
                     for(unsigned i=1;i<=999999;i++) {
@@ -182,10 +199,10 @@ static void worker(void *arg) {
                         fd=open(path,O_RDWR|O_CREAT|O_EXCL,0666);
                         if(fd>=0 || errno!=EEXIST) break;
                     }
-                    if(fd<0) {status("Cannot create WAV (full/card error)");goto failed;}
+                    if(fd<0) {file_error("create WAV");goto failed;}
                     file=fdopen(fd,"w+b");
-                    if(!file) {close(fd);status("Cannot open WAV stream");goto failed;}
-                    if(!wav_begin(&writer,file)) {status("WAV header write failed");goto failed;}
+                    if(!file) {file_error("fdopen WAV");close(fd);goto failed;}
+                    if(!wav_begin(&writer,file)) {file_error("write WAV header");goto failed;}
                     /* Publish only after all blocking preparation has completed. */
                 } else {
                     if(!wav_safe_name(req.name)) {status("Invalid WAV filename");goto failed;}
@@ -228,7 +245,8 @@ failed:
                 if(fsync(fileno(file))) bad=true;
                 if(fclose(file)) bad=true;
                 file=NULL;
-                status(bad ? "REC stopped: card/full/buffer error" : limit ? "WAV saved (size limit reached)" : "WAV saved (demod listening audio)");
+                if(bad) sd_audio_record_error("REC stopped: card/full/buffer error; check space/card, retry REC");
+                else status(limit ? "WAV saved (size limit reached)" : "WAV saved (demod listening audio)");
                 active=SD_AUDIO_IDLE;setmode(active);
             }
         } else if(active==SD_AUDIO_PLAYING) {
@@ -269,20 +287,23 @@ bool sd_audio_init(void) {
     status("SD /AUDIO - tap REFRESH"); return true;
 }
 bool sd_audio_request(int command,const char *name) {
-    if(!requests) return false;
+    if(!requests) {if(command==SD_AUDIO_RECORD) sd_audio_record_error("REC unavailable: SD worker/memory init failed");return false;}
     if((command==SD_AUDIO_PLAY || command==SD_AUDIO_DELETE) && !name) return false;
-    if(name && (!wav_safe_name(name) || ((command==SD_AUDIO_DELETE || command==SD_AUDIO_RECORD) && !wav_recording_name(name)))) return false;
+    if(name && (!wav_safe_name(name) || ((command==SD_AUDIO_DELETE || command==SD_AUDIO_RECORD) && !wav_recording_name(name)))) {
+        if(command==SD_AUDIO_RECORD) sd_audio_record_error("REC rejected: invalid metadata filename");
+        return false;
+    }
     /* STOP cannot be lost behind a full queue or a slow mount. Epoch invalidates
      * older queued starts so leaving the screen cannot start a hidden recording. */
     taskENTER_CRITICAL(&mux);
     if(command==SD_AUDIO_STOP) {command_epoch++;stop_requested=true;mode=SD_AUDIO_IDLE;state.state=SD_AUDIO_IDLE;state.record_requested=false;state.generation++;taskEXIT_CRITICAL(&mux);return true;}
-    if(command==SD_AUDIO_RECORD && playback_page) {taskEXIT_CRITICAL(&mux);return false;}
+    if(command==SD_AUDIO_RECORD && playback_page) {taskEXIT_CRITICAL(&mux);sd_audio_record_error("REC blocked: leave PLAY/INFO page, then retry REC");return false;}
     if(command==SD_AUDIO_DELETE) {
         if(mode==SD_AUDIO_RECORDING || state.record_requested) {taskEXIT_CRITICAL(&mux);return false;}
         command_epoch++;stop_requested=true;mode=SD_AUDIO_IDLE;state.state=SD_AUDIO_IDLE;state.generation++;
     }
     unsigned epoch=command_epoch;
-    if(command==SD_AUDIO_RECORD && mode==SD_AUDIO_IDLE) {state.record_requested=true;state.generation++;}
+    if(command==SD_AUDIO_RECORD && mode==SD_AUDIO_IDLE) {state.record_error=false;state.record_requested=true;state.generation++;}
     taskEXIT_CRITICAL(&mux);
     request_t req={.command=command,.epoch=epoch};
     if(name) {
@@ -294,6 +315,7 @@ bool sd_audio_request(int command,const char *name) {
         taskENTER_CRITICAL(&mux);
         if(epoch==command_epoch && mode!=SD_AUDIO_RECORDING) {state.record_requested=false;state.generation++;}
         taskEXIT_CRITICAL(&mux);
+        sd_audio_record_error("REC queue full: wait, then retry REC");
     }
     return sent;
 }

@@ -17,7 +17,7 @@ s=Path('main/audio.c').read_text()
 Path(sys.argv[1]).write_text(s[s.index('#define READ_MAX'):s.index('bool audio_init(void)')])
 PY
 $cc $flags -Wno-unused-parameter -pthread -I"$out" -Itests/sd_audio_host -Imain '-DSDCARD_ROOT="host-card"' \
-    tests/sd_audio_worker_test.c tests/audio_route_runtime_test.c main/sd_audio.c main/wav_audio.c -Wl,--wrap=wav_begin,--wrap=wav_open,--wrap=fread,--wrap=fwrite,--wrap=fflush,--wrap=fclose -o "$out/worker"
+    tests/sd_audio_worker_test.c tests/audio_route_runtime_test.c main/sd_audio.c main/wav_audio.c -Wl,--wrap=open,--wrap=wav_begin,--wrap=wav_open,--wrap=fread,--wrap=fwrite,--wrap=fflush,--wrap=fclose -o "$out/worker"
 root=$(mktemp -d "$TMPDIR/p4-sd-audio.XXXXXX")
 mkdir "$root/host-card"
 (cd "$root" && "$out/worker")
