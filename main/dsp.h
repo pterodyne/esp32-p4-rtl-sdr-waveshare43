@@ -5,10 +5,14 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_heap_caps.h"
-#define BIG_ALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM)
+/* Hot FIR taps/history and small stage workspace must not contend with DPI's
+ * external-framebuffer reads. Never silently fall back to PSRAM. */
+#define DSP_ALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#define DSP_FREE(p) heap_caps_free(p)
 #else
 #include <stdlib.h>
-#define BIG_ALLOC(n) calloc(1, (n))
+#define DSP_ALLOC(n) calloc(1, (n))
+#define DSP_FREE(p) free(p)
 #endif
 
 #define PI_F 3.14159265f
@@ -21,6 +25,7 @@ typedef struct {
 } fir_t;
 
 bool fir_alloc(fir_t *f, int n_max, int d, int w, int cap);
+void fir_free(fir_t *f);
 /* Kaiser-windowed low pass, pass and stop edges in Hz at rate fs, atten_db in the stop band.
  * The length comes from the transition width, odd and at most n_max. Clears the history. */
 void fir_design(fir_t *f, int n_max, float fs, float pass, float stop, float atten_db);

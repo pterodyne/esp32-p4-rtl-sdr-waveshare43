@@ -20,3 +20,4 @@ python3 tests/hackrf_gain_immediate_test.py
 python3 tests/narrow_zoom_test.py
 python3 tests/spectrum_columns_test.py
 python3 tests/ssb_audio_display_runtime_test.py
+python3 tests/dsp_memory_placement_test.py

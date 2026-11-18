@@ -44,6 +44,7 @@ static const char *TAG = "audio";
 #define LAG_KEEP  (20 * BYTES_MS)
 
 static esp_codec_dev_handle_t s_dev;
+static volatile bool s_ready;
 static audio_pause_gate_t s_pause_gate = AUDIO_PAUSE_GATE_INIT;
 static volatile bool s_open;
 static audio_output_requests_t s_output = AUDIO_OUTPUT_REQUESTS_INIT;
@@ -62,8 +63,13 @@ static void set_volume(int v)
 static void audio_task(void *arg)
 {
     uint8_t *iq = heap_caps_malloc(READ_MAX, MALLOC_CAP_SPIRAM);
-    int16_t *pcm = heap_caps_malloc((READ_MAX / 100 + 4) * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-    if (!iq || !pcm) { ESP_LOGE(TAG, "no memory"); vTaskDelete(NULL); }
+    int16_t *pcm = heap_caps_malloc((READ_MAX / 100 + 4) * sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!iq || !pcm) {
+        heap_caps_free(iq); heap_caps_free(pcm);
+        s_ready = false;
+        ESP_LOGE(TAG, "no memory for IQ/ internal PCM workspace"); vTaskDelete(NULL); return;
+    }
+    s_ready = true;
     uint64_t pos = 0, dropped = 0;
     int64_t busy = 0, t_stat = esp_timer_get_time();
     int lag_max = 0;
@@ -166,13 +172,13 @@ bool audio_init(void)
         return false;
     }
     set_volume(0);
-    if (!demod_init()) return false;
-    xTaskCreatePinnedToCore(audio_task, "audio", 6144, NULL, 6, NULL, 0);
+    if (!demod_init()) { ESP_LOGE(TAG, "no internal memory for DSP filters/workspace"); return false; }
+    if (xTaskCreatePinnedToCore(audio_task, "audio", 6144, NULL, 6, NULL, 0) != pdPASS) return false;
     ESP_LOGI(TAG, "ES8311 ready, 48 kHz");
     return true;
 }
 
-bool audio_ok(void) { return s_dev != NULL; }
+bool audio_ok(void) { return s_ready; }
 
 void audio_set_mode(demod_mode_t mode, uint32_t bw_hz)
 {

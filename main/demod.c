@@ -92,8 +92,12 @@ bool demod_init(void)
               fir_alloc(&s_w2, 101, 2, 1, CHUNK / 25 + 1) &&
               fir_alloc(&s_n1, 41, 5, 2, CHUNK / 5 + 1) &&
               fir_alloc(&s_n2, 161, 2, 2, CHUNK / 25 + 1);
-    s_tmp = BIG_ALLOC((CHUNK / 5 + 1) * 2 * sizeof(float));
-    if (!ok || !s_tmp || !rds_init()) return false;
+    s_tmp = ok ? DSP_ALLOC((CHUNK / 5 + 1) * 2 * sizeof(float)) : NULL;
+    if (!ok || !s_tmp || !rds_init()) {
+        fir_free(&s_w1); fir_free(&s_w2); fir_free(&s_n1); fir_free(&s_n2);
+        DSP_FREE(s_tmp); s_tmp = NULL;
+        return false;
+    }
     demod_set(DEMOD_WFM, 200000);
     return true;
 }

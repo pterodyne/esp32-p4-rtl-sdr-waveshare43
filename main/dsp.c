@@ -7,9 +7,18 @@
 bool fir_alloc(fir_t *f, int n_max, int d, int w, int cap)
 {
     f->d = d; f->w = w; f->cap = cap;
-    f->h = BIG_ALLOC(n_max * sizeof(float));
-    f->buf = BIG_ALLOC((n_max - 1 + cap) * w * sizeof(float));
-    return f->h && f->buf;
+    f->h = DSP_ALLOC(n_max * sizeof(float));
+    f->buf = f->h ? DSP_ALLOC((n_max - 1 + cap) * w * sizeof(float)) : NULL;
+    if (f->h && f->buf) return true;
+    fir_free(f);
+    return false;
+}
+
+void fir_free(fir_t *f)
+{
+    DSP_FREE(f->h);
+    DSP_FREE(f->buf);
+    memset(f, 0, sizeof *f);
 }
 
 static float bessel_i0(float x)
