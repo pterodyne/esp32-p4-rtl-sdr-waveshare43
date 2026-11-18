@@ -20,6 +20,7 @@
 #include "waveshare_geometry.h"
 #endif
 #include "sdr.h"
+#include "hackrf_gain_store.h"
 #include "ui.h"
 #include "view.h"
 
@@ -28,7 +29,11 @@ static touch_cal_t s_cal;
 
 static int s_theme;                          /* the saved look: the splash is drawn in it */
 
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+#define SUB "HackRF One RX-only receiver"
+#else
 #define SUB    "RTL-SDR Blog V4 receiver"
+#endif
 #define FRAMES 15                            /* the splash plays over the 1.5 s touch hold */
 #define LINE(n) (view_splash_text_y() + 16 * (n))   /* status lines, then the dongle */
 
@@ -99,7 +104,13 @@ static void load_settings(void)
     }
 #endif
     if (nvs_get_u32(h, "freq", &f) == ESP_OK) sdr_set_freq(f);
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    int l=40,v=0;
+    if(hackrf_gain_load(h,&l,&v)) { sdr_set_stage_gain(true,l); sdr_set_stage_gain(false,v); }
+    (void)g;
+#else
     if (nvs_get_i32(h, "gaint", &g) == ESP_OK) sdr_set_gain_tenths(g);   /* applied on open */
+#endif
     if (nvs_get_i32(h, "theme", &p) == ESP_OK) s_theme = p;
     nvs_close(h);
 }
@@ -108,7 +119,9 @@ static void main_task(void *arg)
 {
     load_settings();                         /* first: it holds the screen orientation */
     splash_and_touch();
-#ifdef CONFIG_SDR_WAVESHARE_43
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    status(SPLASH_TEXT, "looking for HackRF One on USB host header...");
+#elif defined(CONFIG_SDR_WAVESHARE_43)
     status(SPLASH_TEXT, "looking for RTL-SDR on USB OTG (powered hub)...");
 #else
     status(SPLASH_TEXT, "looking for the RTL-SDR on the USB-A ports...");
@@ -116,13 +129,19 @@ static void main_task(void *arg)
     char desc[96];
     int tries = 0;
     while (!sdr_open(5000, desc, sizeof desc)) {
-#ifdef CONFIG_SDR_WAVESHARE_43
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+        if (++tries == 1) status(SPLASH_BAD, "no HackRF: check header USB data and power");
+#elif defined(CONFIG_SDR_WAVESHARE_43)
         if (++tries == 1) status(SPLASH_BAD, "no RTL-SDR yet: check USB-C OTG host power");
 #else
         if (++tries == 1) status(SPLASH_BAD, "no RTL-SDR yet: plug it in, or move the H3 cap");
 #endif
     }
     view_splash_line(LINE(2), desc, SPLASH_OK);
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    status(SPLASH_TEXT, "HackRF: counter test unavailable; RX unverified");
+    vTaskDelay(pdMS_TO_TICKS(1500));
+#else
     status(SPLASH_TEXT, "USB link check...");
     uint64_t lost;
     double bps;
@@ -132,6 +151,7 @@ static void main_task(void *arg)
              (unsigned long long)lost);
     status(ok ? SPLASH_OK : SPLASH_BAD, msg);
     vTaskDelay(pdMS_TO_TICKS(ok ? 800 : 3000));
+#endif
     ESP_LOGI(TAG, "free internal %u KB, PSRAM %u KB",
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));

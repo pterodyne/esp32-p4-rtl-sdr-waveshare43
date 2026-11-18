@@ -10,6 +10,7 @@ typedef struct {
     int state, count, batch;
     bool more;
     bool record_requested; /* pending preparation OR actively recording; STOP cancels both */
+    bool record_error; /* latched until next REC; main header offers INFO */
     unsigned generation;
     char status[80];
     char name[SD_AUDIO_NAME];
@@ -18,6 +19,7 @@ typedef struct {
 bool sd_audio_init(void);
 bool sd_audio_request(int command, const char *name);
 void sd_audio_snapshot(sd_audio_snapshot_t *out);
+void sd_audio_record_error(const char *text);
 /* Audio owner only; bounded copy, never filesystem/codec/queue wait. Captures demod PCM,
  * OR substitutes playback PCM (zero on underrun); never records its own playback. */
 bool sd_audio_playing(void);

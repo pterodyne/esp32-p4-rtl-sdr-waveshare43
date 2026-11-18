@@ -1,0 +1,10 @@
+menu "SDR receiver"
+choice SDR_BACKEND
+    prompt "USB receiver backend"
+    default SDR_BACKEND_RTL
+config SDR_BACKEND_RTL
+    bool "RTL-SDR"
+config SDR_BACKEND_HACKRF
+    bool "HackRF One (RX only, experimental low sample rates)"
+endchoice
+endmenu

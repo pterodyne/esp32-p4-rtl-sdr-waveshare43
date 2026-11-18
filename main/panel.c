@@ -130,7 +130,7 @@ static pkey_t *grid(int x, int y, int w, int h, int cols, int rows, int i, int i
 
 static void gain_text(const ctl_t *c, char *b, size_t n)
 {
-    snprintf(b, n, "%s", c->gain_idx ? c->gain_label(c->gain_idx) : "AGC");
+    snprintf(b, n, "%s", c->gain_label(c->gain_idx));
 }
 
 /* three keys on a row: [-] value [+] */
@@ -239,8 +239,13 @@ static void build(const ctl_t *c)
     case P_GAIN: {
         int h1 = (bh - GAP) * 55 / 100;
         gain_text(c, v, sizeof v);
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+        stepper(by, h1, K_GAIN_DN, K_GAIN_UP, v, "manual LNA / VGA; amp OFF");
+        static const char *pl[4] = {"L0 V0", "~15 dB", "~30 dB", "MAX"};
+#else
         stepper(by, h1, K_GAIN_DN, K_GAIN_UP, v, c->gain_idx ? "tuner gain" : "tuner AGC");
         static const char *pl[4] = {"AGC", "15 dB", "30 dB", "MAX"};
+#endif
         int t = c->gain_tenths(c->gain_idx);
         for (int i = 0; i < 4; i++) {
             pkey_t *k = grid(GAP, by + h1 + GAP, bw, bh - h1 - GAP, p ? 2 : 4, p ? 2 : 1, i, K_GAIN_P + i, pl[i], NULL);
@@ -269,13 +274,22 @@ static void build(const ctl_t *c)
                            c->bias_error ? (c->bias_forced ? "EEPROM FORCES ON" : "POWER ? RETRY OFF")
                                          : "no antenna power");
         off->sel = !c->bias && !c->bias_error; off->disabled = c->bias_forced;
-        grid(GAP, by, bw, half, 2, 1, 1, K_BIAS_ON, "BIAS-T ON", "4.5V ACTIVE LNA ONLY")
+        grid(GAP, by, bw, half, 2, 1, 1, K_BIAS_ON, "BIAS-T ON",
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+             "3.3V ACTIVE LNA ONLY")
+#else
+             "4.5V ACTIVE LNA ONLY")
+#endif
             ->sel = c->bias && !c->bias_error;
         static const char *names[3] = {"TUNER", "ADC I", "ADC Q"};
         for (int i = 0; i < 3; i++) {
             pkey_t *k = grid(GAP, by + half + GAP, bw, bh - half - GAP, 3, 1, i,
                               K_DIRECT + i, names[i],
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+                              i ? "NO DIRECT ADC" : "HackRF RX mixer");
+#else
                               i && !c->direct_supported ? "V4: USE TUNER" : i ? "wired ADC only" : "V4 HF mixer/auto");
+#endif
             k->sel = i == c->direct;
             k->disabled = i && !c->direct_supported;
         }

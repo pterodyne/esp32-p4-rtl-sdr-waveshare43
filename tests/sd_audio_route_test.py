@@ -11,6 +11,12 @@ record = u.split('if (act == VIEW_RECORD)', 1)[1].split('if (act == VIEW_PRESETS
 assert 'record_requested) sd_audio_request(SD_AUDIO_STOP' in record
 assert 'wav_record_name(name,sizeof name,sdr_freq(),s_ctl.bw,(int64_t)time(NULL),0)' in record
 assert 'sd_audio_request(SD_AUDIO_RECORD,name)' in record
+assert 'sd_audio_record_error("REC unavailable: audio codec init failed")' in record
+assert 'view_set_record_error(s_ctl.sd_audio.record_error)' in record
+assert 'view_set_record_error(snapshot.record_error)' in u
+assert 'if(!s_ctl.sd_audio.record_error) sd_audio_request(SD_AUDIO_REFRESH, NULL)' in u, 'INFO must retain the recording error until explicit REFRESH'
+v=(p/'main/view.c').read_text()
+assert 's_record_error ? "INFO" : "PLAY"' in v and 's_record_error ? "ERR" : "REC"' in v
 assert 's_ctl.audio_delete_name' in u and 'SD_AUDIO_DELETE' in u
 assert 'panel_show' not in record and 'panel_open' not in record, 'REC must stay on receiver'
 assert 'sd_audio_playback_page(true);' in u

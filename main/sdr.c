@@ -29,6 +29,7 @@ static volatile uint64_t s_wr;                /* total bytes written into the ri
 static volatile bool s_streaming;
 static TaskHandle_t s_rx_task, s_waiter;
 static uint32_t s_freq = 100000000, s_rate = SDR_SAMPLE_RATE;
+static bool s_rate_known; /* s_rate retains the last confirmed/requested reopen rate */
 static hf_diag_state_t s_hf_diag; /* UI task owns tuning and menu reads */
 
 static void capture_tune(uint32_t hz, int rc)
@@ -121,7 +122,12 @@ bool sdr_open(uint32_t timeout_ms, char *desc, size_t desc_len)
     esp_log_level_set("USBH", ESP_LOG_WARN);
     if (r < 0) { ESP_LOGE(TAG, "rtlsdr_open %d", r); s_dev = NULL; return false; }
     memset(&s_hf_diag, 0, sizeof s_hf_diag); /* reconnect is a new device/identity */
-    rtlsdr_set_sample_rate(s_dev, s_rate);
+    s_rate_known = rtlsdr_set_sample_rate(s_dev, s_rate) == 0;
+    if (!s_rate_known) {
+        rtlsdr_close(s_dev);
+        s_dev = NULL;
+        return false;
+    }
     int tune_rc = rtlsdr_set_center_freq(s_dev, s_freq);
     capture_tune(s_freq, tune_rc);
     char manufacturer[256] = {0}, product[256] = {0};
@@ -170,6 +176,7 @@ bool sdr_close(void)
     }
     if (s_dev) rtlsdr_close(s_dev);
     s_dev = NULL;
+    s_rate_known = false;
     memset(&s_hf_diag, 0, sizeof s_hf_diag);
     s_bias.command_ok = false;
     s_bias_forced = s_direct_supported = false;
@@ -178,7 +185,7 @@ bool sdr_close(void)
 
 void sdr_start(void)
 {
-    if (!s_dev || s_rx_task) return;
+    if (!s_dev || s_rx_task || !s_rate_known) return;
     rtlsdr_reset_buffer(s_dev);
     s_streaming = true;                       /* before the task runs, so the UI never sees a gap */
     xTaskCreatePinnedToCore(rx_task, "rtl_rx", 6144, NULL, 20, &s_rx_task, 0);
@@ -272,11 +279,19 @@ uint64_t sdr_total_bytes(void) { return s_wr; }
 
 void sdr_set_sample_rate(uint32_t hz)
 {
-    s_rate = hz;
-    if (s_dev) rtlsdr_set_sample_rate(s_dev, hz);
+    if (s_rx_task) return; /* rate registers belong to a stopped receiver */
+    if (!s_dev) { s_rate = hz; s_rate_known = false; return; }
+    bool old_known = s_rate_known;
+    if (rtlsdr_set_sample_rate(s_dev, hz) == 0) {
+        s_rate = hz;
+        s_rate_known = true;
+    } else {
+        /* A failed command may have partially changed the demodulator clock. */
+        s_rate_known = old_known && rtlsdr_set_sample_rate(s_dev, s_rate) == 0;
+    }
 }
 
-uint32_t sdr_sample_rate(void) { return s_rate; }
+uint32_t sdr_sample_rate(void) { return s_rate_known ? s_rate : 0; }
 
 bool sdr_bias_tee(void) { return s_bias.on; }
 bool sdr_bias_command_ok(void) { return s_bias.command_ok; }

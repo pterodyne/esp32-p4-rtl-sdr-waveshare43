@@ -6,7 +6,10 @@
 
 #define SDR_SAMPLE_RATE 2400000
 
-/* Wait up to timeout_ms for an RTL-SDR on the USB-A ports, open it, set the sample rate. */
+/* Selected USB receiver backend; unsigned interleaved 8-bit I/Q at application rate.
+ * RTL-specific AGC/direct-sampling semantics below do not apply to HackRF builds;
+ * see docs/HACKRF-RX.md. HackRF exposes manual paired LNA/VGA gains, including index 0. */
+/* Wait up to timeout_ms for the selected receiver on the P4 USB host. */
 bool sdr_open(uint32_t timeout_ms, char *desc, size_t desc_len);
 bool sdr_close(void);                        /* false if RX task still owns the USB device */
 /* Counter-mode USB check (no streaming running): lost bytes and measured bytes/s. */
@@ -21,6 +24,10 @@ uint32_t sdr_freq(void);
 /* Snapshot of USB identity and last HF/VHF command observations, not RF proof. */
 hf_diag_state_t sdr_hf_diag_snapshot(void);
 /* Gain steps: index 0 = tuner AGC, then every gain the tuner offers (29 on the R828D). */
+/* HackRF-only independent stages; true selects LNA, false VGA. */
+int sdr_stage_gain(bool lna);
+bool sdr_stage_known(bool lna);
+bool sdr_set_stage_gain(bool lna, int db);
 int sdr_gain_presets(void);
 int sdr_gain_index(void);
 void sdr_set_gain_index(int i);
@@ -35,9 +42,16 @@ uint64_t sdr_total_bytes(void);
 /* In-order reader: copy up to max bytes from stream byte *pos on and advance it. A reader that
  * fell a ring behind jumps ahead; the bytes skipped are added to *dropped. */
 size_t sdr_ring_read(uint8_t *dst, uint64_t *pos, size_t max, uint64_t *dropped);
-/* Stop the stream before changing it. Kept across sdr_close/sdr_open. */
+/* Application/ring IQ rate, NOT necessarily the hardware capture rate.
+ * Stop before changing it. Kept across close/open. HackRF captures fixed
+ * 8 MHz and reports 0 if its clock/filter state is unknown after failure. */
 void sdr_set_sample_rate(uint32_t hz);
 uint32_t sdr_sample_rate(void);
+/* Checked transition used by foreground DSP modes; never decode a mislabeled rate. */
+static inline bool sdr_request_sample_rate(uint32_t hz) {
+    sdr_set_sample_rate(hz);
+    return sdr_sample_rate() == hz;
+}
 /* Bias tee powers an active antenna/LNA; OFF by default on every device open.
  * A Blog EEPROM may force it ON independently of the UI. False = rejected/USB error. */
 bool sdr_set_bias_tee(bool on);

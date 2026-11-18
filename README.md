@@ -10,6 +10,20 @@ attribution and GPL-3.0 license remain. GitHub currently still labels this
 repository a fork; leaving the fork network is a separate, irreversible
 GitHub account action that removes pull-request and other repository metadata.
 
+## Experimental HackRF One RX build
+
+A selectable **HackRF One RX-only** backend now targets the same 4.3-inch board.
+Build with `SDR_BACKEND=hackrf tools/build_waveshare43.sh`; normal builds remain
+RTL. Read [HackRF setup, 8 MS/s conversion and verification status](docs/HACKRF-RX.md)
+before testing. The owner reports FM working at LNA 40 / VGA 62 (FM-only
+evidence); this UI revision has host tests and rev1/rev3 cross-builds, not new
+physical-board verification. Independent LNA -/+ and VGA -/+ now sit beside the
+readout; the old header GAIN preset toggle is removed only for HackRF. Portrait
+reserves an additional readout row to avoid overlap. The RTL-specific AGC/direct-ADC/Bias-T
+statements below apply to RTL builds; HackRF uses manual LNA/VGA, no direct ADC,
+3.3 V optional antenna power and an always-disabled RF amp. No 7-inch BSP is
+assumed or included.
+
 ## Waveshare UI previews
 
 ![Host-rendered Waveshare Freeform receiver preview](docs/images/waveshare-main-freeform.png)
@@ -45,7 +59,7 @@ and **SQL −/+** on the right. Mute silences the speaker without changing the
 saved volume or stopping the RF stream; tap again to restore the same level.
 Hold the volume/squelch keys to repeat (mute is a single toggle). Volume ranges from
 0 (off) to 10 and squelch from 0 (open) to 9; **MENU → AUDIO** also offers
-these modes and settings. The header **ZOOM** key after GAIN cycles **2.4 MHz → 1.2 MHz → 600 kHz → 300 kHz → 2.4 MHz**; footer zoom +/- controls are removed. Capture stays at **2.4 MS/s**. FFT size is capped at **4096**, so 300 kHz does not improve FFT resolution beyond 600 kHz. This is host-tested, not hardware-verified.
+these modes and settings. The header **ZOOM** key after GAIN cycles **2.4 MHz → 1.2 MHz → 600 kHz → 300 kHz → 2.4 MHz**; footer zoom +/- controls are removed. DSP IQ stays at **2.4 MS/s** (RTL captures 2.4; HackRF captures fixed 8 MS/s and FIR-resamples). FFT size is capped at **4096**, so 300 kHz does not improve FFT resolution beyond 600 kHz. This is host-tested, not hardware-verified.
 
 The two arrows on the **bottom tuning bar** tune by the increment shown on
 the split **STEP** selector. Its left half cycles down and its right half cycles up

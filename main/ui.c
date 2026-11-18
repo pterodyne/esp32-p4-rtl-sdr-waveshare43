@@ -30,6 +30,7 @@
 #include "waveshare_geometry.h"
 #include "touch_mode_store.h"
 #include "quick_gain.h"
+#include "hackrf_gain_store.h"
 #endif
 #include "sdr.h"
 #include "rtlsdr_usb.h"
@@ -88,6 +89,9 @@ static int64_t s_hop_at, s_dwell_until;
 static int s_battery_drawn = -1;
 static void draw_header(int pressed) {
     s_battery_drawn = battery_voltage_get();
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    view_set_stage_gains(sdr_stage_gain(true),sdr_stage_gain(false),sdr_stage_known(true),sdr_stage_known(false));
+#endif
     view_header(sdr_freq(), sdr_gain_label(sdr_gain_index()), pressed);
     if (!s_panel) view_audio_controls(s_ctl.vol, s_ctl.sql, s_ctl.bw, s_ctl.zoom, pressed);
 }
@@ -99,6 +103,10 @@ static bool s_nvs_ready;
 static int64_t s_save_at;
 static bool s_theme_save_failed;
 static audio_save_pending_t s_audio_pending;
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+static audio_save_pending_t s_hackrf_pending;
+static int s_hackrf_lna, s_hackrf_vga;
+#endif
 static screen_idle_t s_screen_idle;
 static peak_iq_gate_t s_peak_iq;
 static int64_t s_screen_save_at;
@@ -136,7 +144,9 @@ static void settings_maybe_save(bool force)
     if (!settings_save_due(s_save_at, esp_timer_get_time(), force)) return;
     s_save_at = 0;
     nvs_set_u32(s_nvs, "freq", s_remote_active ? s_remote_saved_hz : sdr_freq());
+#ifndef CONFIG_SDR_BACKEND_HACKRF
     nvs_set_i32(s_nvs, "gaint", s_remote_active ? s_remote_saved_gain : sdr_gain_tenths(sdr_gain_index()));
+#endif
     nvs_set_i32(s_nvs, "theme", view_theme());
 #ifdef CONFIG_SDR_WAVESHARE_43
     nvs_set_i32(s_nvs, "tstep", s_tune_step);
@@ -151,6 +161,36 @@ static void settings_maybe_save(bool force)
     ESP_LOGI(TAG, "saved %" PRIu32 " Hz, gain %s, zoom %d, bw %d", sdr_freq(),
              sdr_gain_label(sdr_gain_index()), s_ctl.zoom, s_ctl.bw);
 }
+
+/* UI-task only: capture accepted desired gains, not temporary foreground gains. */
+static void hackrf_settings_try_save(bool force)
+{
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    int64_t now = esp_timer_get_time();
+    if (!s_hackrf_pending.dirty || (!force && !audio_save_pending_due(&s_hackrf_pending, now))) return;
+    esp_err_t err = ESP_OK;
+    if (!s_nvs_ready) {
+        err = nvs_open("sdr", NVS_READWRITE, &s_nvs);
+        s_nvs_ready = err == ESP_OK;
+    }
+    if (err == ESP_OK) err = hackrf_gain_save(s_nvs, s_hackrf_lna, s_hackrf_vga);
+    audio_save_pending_result(&s_hackrf_pending, err == ESP_OK, now);
+    if (err != ESP_OK) ESP_LOGW(TAG, "HackRF gain save failed (%s); retry in 5 s", esp_err_to_name(err));
+#else
+    (void)force;
+#endif
+}
+
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+static void hackrf_settings_changed(void)
+{
+    if (s_remote_active) return;
+    s_hackrf_lna = sdr_stage_gain(true);
+    s_hackrf_vga = sdr_stage_gain(false);
+    audio_save_pending_mark(&s_hackrf_pending);
+    hackrf_settings_try_save(false);
+}
+#endif
 
 static int32_t nvs_int(const char *key, int32_t def)
 {
@@ -415,6 +455,18 @@ static void turn(void)
 
 static void do_action(int act)
 {
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    if (act >= VIEW_LNA_DN && act <= VIEW_VGA_UP) {
+        bool lna=act<=VIEW_LNA_UP;
+        int step=lna?8:2, max=lna?40:62;
+        int db=sdr_stage_gain(lna)+(act==VIEW_LNA_UP || act==VIEW_VGA_UP ? step : -step);
+        if(db<0) db=0;
+        if(db>max) db=max;
+        if(sdr_set_stage_gain(lna,db)) hackrf_settings_changed();
+        draw_header(act);
+        return;
+    }
+#endif
     if (act == VIEW_MUTE) {
         s_muted = !s_muted;
         audio_set_mute(s_muted); /* don't replace persisted volume or stop IQ/RDS processing */
@@ -472,10 +524,12 @@ static void do_action(int act)
                 /* Freeze all metadata on REC, before any worker/mount delay. */
                 if(wav_record_name(name,sizeof name,sdr_freq(),s_ctl.bw,(int64_t)time(NULL),0))
                     sd_audio_request(SD_AUDIO_RECORD,name);
+                else sd_audio_record_error("REC rejected: cannot format frequency/mode/time filename");
             }
-        }
+        } else sd_audio_record_error("REC unavailable: audio codec init failed");
         sd_audio_snapshot(&s_ctl.sd_audio);
         view_set_recording(s_ctl.sd_audio.record_requested);
+        view_set_record_error(s_ctl.sd_audio.record_error);
         draw_header(act);
         return;
     }
@@ -488,7 +542,8 @@ static void do_action(int act)
             sd_audio_snapshot(&s_ctl.sd_audio);
             view_set_recording(s_ctl.sd_audio.record_requested);
             panel_open_recordings(&s_ctl);
-            sd_audio_request(SD_AUDIO_REFRESH, NULL);
+            /* INFO retains the failed REC diagnostic; explicit REFRESH lists files. */
+            if(!s_ctl.sd_audio.record_error) sd_audio_request(SD_AUDIO_REFRESH, NULL);
         }
         draw_header(act);
         return;
@@ -606,6 +661,9 @@ static void panel_event(int ev, int x, int y, int64_t now)
     }
     if (ch & CTL_GAIN) {
         sdr_set_gain_index(s_ctl.gain_idx);
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+        if (sdr_stage_known(true) && sdr_stage_known(false)) hackrf_settings_changed();
+#endif
         draw_header(-1);
     }
     if (ch & CTL_BIAS) {
@@ -694,6 +752,7 @@ static void poll_touch(const touch_cal_t *cal)
                 strcmp(s_ctl.audio_selected_name,snapshot.files[s_ctl.audio_file]))) s_ctl.audio_file=-1;
             s_ctl.sd_audio = snapshot;
             view_set_recording(snapshot.record_requested);
+            view_set_record_error(snapshot.record_error);
             draw_header(-1);
             if (s_ctl.audio_file >= snapshot.count) s_ctl.audio_file = -1;
             if (s_panel && panel_recordings_visible()) {
@@ -902,6 +961,18 @@ static void log_aircraft(void)
 
 /* 1090 MHz at 2 MS/s, max gain, every sample through the decoder. Returns when EXIT is
  * tapped or the stream dies; the receiver settings are restored either way. */
+/* Remains set across failed rollback, stream restart and device reopen. */
+static bool s_normal_restore_pending;
+
+static bool normal_rate_restore(void)
+{
+    if (!sdr_request_sample_rate(SDR_SAMPLE_RATE)) return false;
+    s_normal_restore_pending = false;
+    sdr_start();
+    audio_pause(false);
+    return true;
+}
+
 static void adsb_mode(const touch_cal_t *cal)
 {
     enum { BUF = 32 * 1024 };
@@ -910,6 +981,9 @@ static void adsb_mode(const touch_cal_t *cal)
     assert(buf);
     const uint32_t freq = sdr_freq();
     const int gain = sdr_gain_index();
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    const int saved_lna = sdr_stage_gain(true), saved_vga = sdr_stage_gain(false);
+#endif
     ESP_LOGI(TAG, "ADS-B mode");
     audio_pause(true);
     sdr_stop();
@@ -930,7 +1004,7 @@ static void adsb_mode(const touch_cal_t *cal)
             }
         }
     }
-    sdr_set_sample_rate(ADSB_RATE);
+    if (!sdr_request_sample_rate(ADSB_RATE)) goto adsb_restore;
     sdr_set_freq(1090000000);
     sdr_set_gain_index(sdr_gain_presets() - 1);
     sdr_start();
@@ -957,6 +1031,7 @@ static void adsb_mode(const touch_cal_t *cal)
         }
         int64_t now = esp_timer_get_time();
         audio_settings_try_save(false);
+        hackrf_settings_try_save(false);
         if (n < BUF || now - t_yield > 50000) { vTaskDelay(1); t_yield = now; }
         if (now - t_touch > 20000) {
             t_touch = now;
@@ -997,15 +1072,23 @@ static void adsb_mode(const touch_cal_t *cal)
             t_log = now;
         }
     }
+adsb_restore:
     s_adsb = false;
     ESP_LOGI(TAG, "leaving ADS-B mode");
     sdr_stop();
     sdlog_end();
-    sdr_set_sample_rate(SDR_SAMPLE_RATE);
+    bool rate_restored = sdr_request_sample_rate(SDR_SAMPLE_RATE);
+    s_normal_restore_pending = !rate_restored;
     sdr_set_freq(freq);
     sdr_set_gain_index(gain);
-    sdr_start();
-    audio_pause(false);
+#ifdef CONFIG_SDR_BACKEND_HACKRF
+    sdr_set_stage_gain(true, saved_lna);
+    sdr_set_stage_gain(false, saved_vga);
+#endif
+    if (rate_restored) {
+        sdr_start();
+        audio_pause(false);
+    } else ESP_LOGE(TAG, "receiver rate restore failed; RX/audio remain stopped");
     view_set_theme(view_theme());              /* clears the screen */
     apply_view();
     draw_header(-1);
@@ -1026,6 +1109,7 @@ static void sensor_mode(const touch_cal_t *cal)
     const uint32_t previous_freq = sdr_freq();
     settings_maybe_save(true); /* never persist the sensor center as receiver frequency */
     audio_settings_try_save(true);
+    hackrf_settings_try_save(true);
     ESP_LOGI(TAG, "WH2 / Steelmate foreground decoder: 433.92 MHz");
     audio_pause(true);
     if (!audio_wait_paused(250)) {
@@ -1093,6 +1177,7 @@ static void sensor_mode(const touch_cal_t *cal)
         }
         int64_t now = esp_timer_get_time();
         audio_settings_try_save(false);
+        hackrf_settings_try_save(false);
         while (info.rows && sensor_event_expired(seen_us[info.rows - 1], (uint64_t)now)) {
             info.rows--;
             info.event[info.rows][0] = 0;
@@ -1192,6 +1277,7 @@ static void scan_mode(const touch_cal_t *cal, int kind)
     while (s_sv_action != SV_EXIT) {
         int64_t now = esp_timer_get_time();
         audio_settings_try_save(false);
+        hackrf_settings_try_save(false);
         if (ok) radio_scan_poll();
         s_sv_action = SV_NONE;
         poll_touch(cal);
@@ -1378,14 +1464,17 @@ void ui_run(const touch_cal_t *cal)
     sd_audio_init();
     s_ctl.audio_file = -1;
     for (;;) {
-        audio_settings_try_save(false); /* also retry while the SDR is lost */
+        audio_settings_try_save(false);
+        hackrf_settings_try_save(false); /* also retry while the SDR is lost */
         remote_diag_poll();
         if (!sdr_streaming()) peak_wait_fresh_iq(); /* before touch during recovery */
         poll_touch(cal); /* timeout/wake also work during stream loss */
+        if (s_normal_restore_pending) goto normal_recovery;
         if (s_adsb_req) {
             s_adsb_req = false;
             adsb_mode(cal);
             peak_wait_fresh_iq();
+            if (s_normal_restore_pending) goto normal_recovery;
         }
         if (s_scan_req >= 0) {
             int k = s_scan_req;
@@ -1398,7 +1487,9 @@ void ui_run(const touch_cal_t *cal)
             sensor_mode(cal);
             peak_wait_fresh_iq();
         }
+normal_recovery:
         if (!s_panel && battery_voltage_get() != s_battery_drawn) draw_header(-1);
+        if (s_normal_restore_pending) sdr_stop();
         if (!sdr_streaming()) {
             static int restarts;
             if (!rtlsdr_usb_take_gone() && restarts < 3) {
@@ -1406,7 +1497,8 @@ void ui_run(const touch_cal_t *cal)
                 restarts++;
                 ESP_LOGW(TAG, "stream stopped, restart %d", restarts);
                 vTaskDelay(pdMS_TO_TICKS(500));
-                sdr_start();
+                if (s_normal_restore_pending) normal_rate_restore();
+                else sdr_start();
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
@@ -1420,6 +1512,7 @@ void ui_run(const touch_cal_t *cal)
             vTaskDelay(pdMS_TO_TICKS(2000));
             while (!sdr_open(5000, NULL, 0)) {
                 audio_settings_try_save(false);
+                hackrf_settings_try_save(false);
                 poll_touch(cal);
                 vTaskDelay(pdMS_TO_TICKS(1000));
             }
@@ -1427,9 +1520,14 @@ void ui_run(const touch_cal_t *cal)
             view_reset();
             draw_header(-1);
             view_axis(sdr_freq());
-            sdr_start();
+            if (s_normal_restore_pending) normal_rate_restore();
+            else sdr_start();
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
+        }
+        if (s_normal_restore_pending) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue; /* stop may still be draining: never process ADS-B-rate IQ */
         }
         int64_t t0 = esp_timer_get_time();
         int n = spectrum_size();
